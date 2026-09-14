@@ -15,6 +15,7 @@ protocol BandConnection {
     func start(_ operation: BandOperation, onEvent: @escaping (BandEvent) -> Void,
                onEnd: @escaping (Error?) -> Void) throws
     func stop()
+    func setHandedness(_ hand: BandHand) throws
 }
 
 /// CoreBluetooth and its L2CAP streams share the main run loop in common modes.
@@ -99,8 +100,20 @@ final class NativeBandConnection: NSObject, BandConnection,
         } catch { fail(error) }
     }
 
+    func setHandedness(_ hand: BandHand) throws {
+        guard let session, !stopping, !disconnecting else {
+            throw KinesisError(message: "Connect the band before choosing a hand.")
+        }
+        outgoing.append(try session.setHandedness(hand, at: now))
+        try flushOutput()
+        log.notice("Requested band hand: \(hand.rawValue, privacy: .public)")
+    }
+
     private func emit(_ event: BandEvent) {
         guard !disconnecting, !stopping else { return }
+        if case .handedness(let hand) = event.payload {
+            log.notice("Band hand confirmed: \(hand.rawValue, privacy: .public)")
+        }
         onEvent?(event)
     }
 

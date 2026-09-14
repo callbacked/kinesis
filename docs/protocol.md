@@ -24,6 +24,18 @@ decoded events are delivered directly to the app model on the same actor; there 
 
 keyboard actions preserve the arrow events' native function and numeric-pad flags. media actions use the system media-key event format from the macos sdk's `IOKit/hidsystem` headers. no global keyboard listener is installed.
 
+## handedness
+
+`ConfigReq.is_left_handed` is field 10: `50 00` selects right and `50 01` selects left. it is nested in `RpcRequest` field 5, on input service `0xce56`, message `0x02000314`. an empty config request reads the current configuration. the response uses `0x02000315`, status 1 for the observed success response, and `ConfigResp` in field 6 with handedness in field 10. absence is treated as unknown, never as right-handed.
+
+this mapping comes from meta ai build `948093709`: the native `is_left_handed` string is at module offset `0x93d15b0`; the name-map code at `0x35d03b8`–`0x35d03e0` assigns it field 10. descriptor construction at `0x3b1b5f0`–`0x3b1b610` independently associates that string with 10. the earlier right-wrist configuration capture and a live native app read both returned 0. a live write of 1 followed by a separate empty-config request returned 1. after quitting the app and establishing a fresh connection, the initial read still returned left without another write. persistence across a band reboot has not been tested.
+
+kinesis uses configuration channel `0x8006`, separately from the sensor subscription. only field 10 is included in a write. request ids and the response channel must match; a write acknowledgement triggers an independent read, and the picker is confirmed only after that value matches. rejected, missing, invalid, or timed-out responses stay unconfirmed. reconnecting reads the band again instead of overwriting it with a saved illustration preference.
+
+left-wrist testing reported correct swipe directions and reversed dial movement before app normalization. after the correction, the wearer confirmed the left-hand volume dial's direction. the band also acknowledged switching back to right, followed by an independent read returning right; the wearer then confirmed normal right-hand operation. these hardware checks used the same band and wearer.
+
+the band supplies recognized swipes and taps, while kinesis derives the dial from gyro readings. `BandModel` reverses that derived rotation for the confirmed left-hand setting before sending it to either practice or mac actions. swipes are not mirrored. the dial waits for a confirmed hand setting. [public fit and gesture references](handedness-research.md) do not define the private gyro axes.
+
 ## replaying a recording
 
 `KINESIS_CAPTURE=/path/to/capture.jsonl swift test --filter nativeDecoderMatchesARecordedBandSession` checks an existing poc capture against the native decoder. it re-encrypts recorded plaintext with a synthetic peer’s fresh keys, then compares every decoded gesture and the motion count. recordings are optional local test input and are never bundled with the app or the source archive.

@@ -1,11 +1,7 @@
 import SceneKit
 import SwiftUI
 import simd
-
-enum BandHand: String, CaseIterable, Identifiable {
-    case right, left
-    var id: String { rawValue }
-}
+import KinesisCore
 
 enum HandHighlight: Sendable {
     case none, index, middle

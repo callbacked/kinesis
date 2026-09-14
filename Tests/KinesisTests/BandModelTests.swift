@@ -9,6 +9,12 @@ import KinesisCore
     private var onEvent: ((BandEvent) -> Void)?
     private var onEnd: ((Error?) -> Void)?
     private(set) var starts = 0
+    private(set) var requestedHands: [BandHand] = []
+    var handWriteError: Error?
+    func setHandedness(_ hand: BandHand) throws {
+        if let handWriteError { throw handWriteError }
+        requestedHands.append(hand)
+    }
     func start(_ operation: BandOperation, onEvent: @escaping (BandEvent) -> Void,
                onEnd: @escaping (Error?) -> Void) throws {
         starts += 1
@@ -33,6 +39,51 @@ import KinesisCore
     #expect(condition())
 }
 
+@Test @MainActor func handSelectionUsesTheBandSettingAndPausesControlsUntilTheUserResumes() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set("right", forKey: "bandHand")
+    defaults.set(true, forKey: "setupCompleted")
+    let connection = RecordedConnection()
+    let controls = RecordingControls()
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { 100 })
+    model.selectedAddress = "test-band"
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    model.selectHand(.left)
+    #expect(connection.requestedHands.isEmpty)
+    // The device wins over a stale illustration preference from a previous launch.
+    connection.send(.handedness(.left))
+    #expect(model.bandHand == .left && model.canChangeHand)
+    #expect(defaults.string(forKey: "bandHand") == "left")
+    model.toggleControls()
+    #expect(model.controlsEnabled)
+    model.selectHand(.right)
+    #expect(connection.requestedHands == [.right])
+    #expect(model.bandHand == .left && model.pendingHand == .right)
+    #expect(!model.controlsEnabled && !model.canChangeHand)
+    model.toggleControls()
+    #expect(!model.controlsEnabled)
+    connection.send(.handedness(.right))
+    #expect(model.bandHand == .right && model.pendingHand == nil && model.canChangeHand)
+    #expect(!model.controlsEnabled)
+    #expect(defaults.string(forKey: "bandHand") == "right")
+    model.selectHand(.left)
+    connection.send(.handednessFailure("Rejected"))
+    #expect(model.bandHand == .right && model.pendingHand == nil && !model.canChangeHand)
+    #expect(model.handSettingError == "Rejected")
+    #expect(defaults.string(forKey: "bandHand") == "right")
+    connection.send(.handedness(.right))
+    connection.handWriteError = KinesisError(message: "Write failed")
+    model.selectHand(.left)
+    #expect(model.bandHand == .right && model.pendingHand == nil && !model.canChangeHand)
+    #expect(!model.handConfirmed && model.handSettingError == "Write failed")
+    #expect(defaults.string(forKey: "bandHand") == "right")
+    await model.shutdown()
+}
+
 @Test @MainActor func pausedSetupReceivesDialMovementThroughTheConnection() async throws {
     let suite = "kinesis-tests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))
@@ -43,6 +94,7 @@ import KinesisCore
     var movement: [Double] = []
     let subscription = model.dialTurns.sink { movement.append($0) }
     model.connect()
+    connection.send(.handedness(.right))
     connection.send(.connected)
     connection.send(.heartbeat)
     connection.send(.dialState(true))
@@ -137,6 +189,7 @@ import KinesisCore
     let subscription = model.dialTurns.sink { movement.append($0) }
     defer { subscription.cancel() }
     model.connect()
+    connection.send(.handedness(.right))
     connection.send(.heartbeat)
     connection.send(.dialState(true))
     connection.send(.dialTurn(3))
@@ -144,6 +197,7 @@ import KinesisCore
     connection.finish(error: KinesisError(message: "Disconnected test band"))
     try await waitUntil { connection.starts == 2 }
     #expect(!model.live && !model.dialEngaged && !model.controlsEnabled)
+    connection.send(.handedness(.right))
     connection.send(.heartbeat)
     connection.send(.dialTurn(20))
     let stale = BandGesture(sequence: 1, timestampUs: 1000, finger: "thumb", action: "left", receivedAt: 95)
@@ -170,6 +224,49 @@ import KinesisCore
         if let failure { throw failure }
         actions.append(action)
     }
+}
+
+@Test(arguments: [BandHand.right, .left], [DialTarget.volume, .brightness])
+@MainActor func eachHandUsesTheSameDialDirectionForPracticeAndMacControls(hand: BandHand, target: DialTarget) async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let connection = RecordedConnection()
+    let controls = RecordingControls()
+    var now = 100.0
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { now })
+    model.selectedAddress = "test-band"
+    model.dialTarget = target
+    var practice: [Double] = []
+    let subscription = model.dialTurns.sink { practice.append($0) }
+    defer { subscription.cancel() }
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    connection.send(.dialState(true))
+    connection.send(.dialTurn(2))
+    #expect(practice.isEmpty && controls.actions.isEmpty)
+    connection.send(.handedness(hand))
+    // Physical left-wrist testing found the gyro sign opposite to the right wrist.
+    let increaseRotation = hand == .left ? -2.0 : 2.0
+    connection.send(.dialTurn(increaseRotation))
+    #expect(practice == [2])
+    #expect(controls.actions.isEmpty)
+    model.finishSetup(enableControls: true)
+    now += 0.1
+    connection.send(.dialState(false), at: now)
+    connection.send(.dialState(true), at: now)
+    connection.send(.dialTurn(increaseRotation), at: now)
+    now += 0.1
+    connection.send(.dialTurn(-increaseRotation), at: now)
+    #expect(practice == [2, 2, -2])
+    #expect(controls.actions == [target.action(increasing: true), target.action(increasing: false)])
+    connection.send(.handednessFailure("Couldn't confirm hand"), at: now)
+    now += 0.1
+    connection.send(.dialTurn(20), at: now)
+    #expect(practice == [2, 2, -2])
+    #expect(controls.actions.count == 2)
+    await model.shutdown()
 }
 
 @Test @MainActor func controlDispatchRequiresFreshInputAndStopsOnPauseOrPermissionLoss() async throws {
@@ -232,6 +329,7 @@ import KinesisCore
     let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { now })
     model.selectedAddress = "test-band"
     model.connect()
+    connection.send(.handedness(.right))
     connection.send(.connected)
     connection.send(.heartbeat)
     connection.send(.dialState(true))
@@ -324,6 +422,7 @@ import KinesisCore
                           workspaceNotifications: notifications, clock: { now })
     model.selectedAddress = "test-band"
     model.connect()
+    connection.send(.handedness(.right))
     connection.send(.connected)
     connection.send(.heartbeat)
     model.toggleControls()
@@ -338,6 +437,7 @@ import KinesisCore
     notifications.post(name: NSWorkspace.didWakeNotification, object: nil)
     try await waitUntil { connection.starts == 2 }
     connection.send(.connected, at: now)
+    connection.send(.handedness(.right), at: now)
     connection.send(.heartbeat, at: now)
     connection.send(.dialTurn(20), at: now)
     #expect(model.live && model.controlsEnabled)

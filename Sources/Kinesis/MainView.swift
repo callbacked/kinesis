@@ -288,11 +288,12 @@ private struct BandSettingsView: View {
                 HStack {
                     Text("band hand").font(.system(size: 13, weight: .medium))
                     Spacer()
-                    Picker("Band hand", selection: $model.bandHand) {
+                    Picker("Band hand", selection: Binding(get: { model.pendingHand ?? model.bandHand }, set: { model.selectHand($0) })) {
                         ForEach(BandHand.allCases) { hand in Text(hand.rawValue).tag(hand) }
                     }.pickerStyle(.segmented).labelsHidden().frame(width: 150)
+                    .disabled(!model.canChangeHand)
                 }
-                Text("matches the hand illustration. the band keeps its existing calibration.")
+                Text(model.handSettingStatus)
                     .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
                 Rectangle().fill(KinesisStyle.line).frame(height: 1)
                 Toggle(isOn: $model.startsAutomatically) {
