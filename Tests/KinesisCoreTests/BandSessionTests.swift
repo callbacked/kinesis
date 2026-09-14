@@ -95,11 +95,100 @@ private struct Peer {
                  + BandWire.field(3, finger) + BandWire.field(4, action) + BandWire.field(5, derived)
                  + BandWire.field(12, synthetic), now: now)
     }
+
+    mutating func requests(_ bytes: Data) throws -> [DataXFrame] {
+        try receiver.feed(bytes).flatMap { try datax.feed($0) }
+    }
+
+    mutating func handReply(id: UInt64, value: UInt64?, status: UInt64 = 1, channel: UInt16 = 6,
+                            now: Double = 1) throws -> (events: [BandEvent], requests: [DataXFrame]) {
+        let config = (value.map { BandWire.field(10, $0) } ?? Data()) + BandWire.field(2, 2048)
+        let payload = BandWire.field(1, id) + BandWire.field(2, status) + BandWire.field(6, config)
+        let frame = try BandWire.frame(channel: channel, words: [0x02000315], payload: payload)
+        let result = try session.feed(sender.encrypt(frame), at: 100 + now)
+        return (result.events, try requests(result.outgoing))
+    }
+}
+
+private func reportedHands(_ events: [BandEvent]) -> [BandHand] {
+    events.compactMap { if case .handedness(let hand) = $0.payload { hand } else { nil } }
+}
+
+@Test(arguments: [BandHand.left, .right])
+func nativeHandSelectionWritesOnlyHandednessAndChecksAnIndependentReadback(selected: BandHand) throws {
+    var peer = try Peer()
+    let initial: UInt64 = selected == .left ? 0 : 1
+    let desired: UInt64 = selected == .left ? 1 : 0
+    let query = try #require(peer.startup.last)
+    #expect(query.channel == 0x8006)
+    #expect(query.words == [0x8100ce56, 0x02000314])
+    #expect(query.payload == Data(hex: "08012a00"))
+    #expect(throws: BandProtocolError.self) { try peer.session.setHandedness(selected, at: 100) }
+    let read = try peer.handReply(id: 1, value: initial)
+    #expect(reportedHands(read.events) == [selected == .left ? .right : .left])
+    #expect(read.requests.isEmpty)
+    _ = try peer.send(kind: 0x02000315, payload: BandWire.field(1, 3) + BandWire.field(2, 1)
+        + BandWire.field(5, BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1)), now: 1)
+    let request = try peer.requests(peer.session.setHandedness(selected, at: 101))
+    #expect(request.count == 1)
+    #expect(request[0].channel == 0x8006 && request[0].words.isEmpty)
+    #expect(request[0].payload == Data([0x08, 0x02, 0x2a, 0x02, 0x50, UInt8(desired)]))
+    #expect(throws: BandProtocolError.self) { try peer.session.setHandedness(selected, at: 101) }
+    let stale = try peer.handReply(id: 1, value: desired)
+    #expect(reportedHands(stale.events).isEmpty && stale.requests.isEmpty)
+    let wrongChannel = try peer.handReply(id: 2, value: desired, channel: 7)
+    #expect(reportedHands(wrongChannel.events).isEmpty && wrongChannel.requests.isEmpty)
+    let written = try peer.handReply(id: 2, value: desired, now: 2)
+    #expect(reportedHands(written.events).isEmpty)
+    #expect(written.requests.count == 1)
+    #expect(written.requests[0].channel == 0x8006)
+    #expect(written.requests[0].payload == Data(hex: "08032a00"))
+    let confirmed = try peer.handReply(id: 3, value: desired, now: 3)
+    #expect(reportedHands(confirmed.events) == [selected])
+    #expect(peer.session.hand == selected)
+    #expect(confirmed.requests.isEmpty)
+}
+
+@Test func nativeHandReadRejectsMissingInvalidAndLateValues() throws {
+    for value in [nil, UInt64(2)] {
+        var peer = try Peer()
+        let result = try peer.handReply(id: 1, value: value)
+        #expect(reportedHands(result.events).isEmpty)
+        #expect(result.events.contains { if case .handednessFailure = $0.payload { true } else { false } })
+        #expect(peer.session.hand == nil)
+    }
+    var peer = try Peer()
+    let expired = peer.session.tick(at: 106)
+    #expect(expired.contains { if case .handednessFailure = $0.payload { true } else { false } })
+    let late = try peer.handReply(id: 1, value: 1, now: 7)
+    #expect(reportedHands(late.events).isEmpty && late.requests.isEmpty)
+    #expect(peer.session.hand == nil)
+    var unticked = try Peer()
+    let delayed = try unticked.handReply(id: 1, value: 1, now: 7)
+    #expect(reportedHands(delayed.events).isEmpty && delayed.requests.isEmpty)
+    #expect(delayed.events.contains { if case .handednessFailure = $0.payload { true } else { false } })
+    #expect(unticked.session.hand == nil)
+}
+
+@Test func nativeHandWriteRejectionAndMismatchedReadbackNeverConfirmTheRequestedHand() throws {
+    for rejected in [true, false] {
+        var peer = try Peer()
+        _ = try peer.handReply(id: 1, value: 0)
+        _ = try peer.send(kind: 0x02000315, payload: BandWire.field(1, 3) + BandWire.field(2, 1)
+            + BandWire.field(5, BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1)), now: 1)
+        _ = try peer.requests(peer.session.setHandedness(.left, at: 101))
+        let write = try peer.handReply(id: 2, value: 1, status: rejected ? 2 : 1, now: 2)
+        let result = rejected ? write : try peer.handReply(id: 3, value: 0, now: 3)
+        #expect(!reportedHands(result.events).contains(.left))
+        #expect(result.events.contains { if case .handednessFailure = $0.payload { true } else { false } })
+        #expect(result.requests.isEmpty)
+        #expect(peer.session.hand != .left)
+    }
 }
 
 @Test func nativeHandshakeSubscribesAndStopsTheSameStreamsOnTheSameChannel() throws {
     var peer = try Peer()
-    #expect(peer.startup.map(\.channel) == [0x8002, 0x8001, 0x8003, 0x8005, 0x8005])
+    #expect(peer.startup.map(\.channel) == [0x8002, 0x8001, 0x8003, 0x8005, 0x8005, 0x8006])
     #expect(peer.startup[0].words == [0x81000024, 0x02003000])
     #expect(peer.startup[1].words == [0x02001000])
     let end = try ProtoFields(peer.startup[1].payload)

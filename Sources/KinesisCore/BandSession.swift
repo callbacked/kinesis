@@ -30,6 +30,16 @@ public final class BandSession {
     // Keep these together: enable, disable, and acknowledgement must agree.
     private let streamFields = [3, 6, 8]
     private let streamChannel: UInt16 = 0x8005
+    private let configurationChannel: UInt16 = 0x8006
+    private var configurationID: UInt64 = 0
+    private struct HandRequest {
+        let id: UInt64
+        let hand: BandHand?
+        let reading: Bool
+        let deadline: Double
+    }
+    private var handRequest: HandRequest?
+    public private(set) var hand: BandHand?
 
     public init() throws {
         privateKey = P256.KeyAgreement.PrivateKey()
@@ -100,6 +110,7 @@ public final class BandSession {
                     BandWire.field(1, 1) + BandWire.field(3, Data()))))
                 outgoing.append(try streamRequest(id: 2, enabled: nil))
                 outgoing.append(try streamRequest(id: 3, enabled: true))
+                outgoing.append(try requestHand(nil, reading: true, at: time))
             default: throw BandProtocolError("Unrecognized band setup message")
             }
         }
@@ -109,7 +120,7 @@ public final class BandSession {
             for plaintext in records {
                 authenticatedPackets += 1
                 for frame in try datax.feed(plaintext) {
-                    events += try input(frame, at: time)
+                    events += try input(frame, at: time, outgoing: &outgoing)
                 }
                 if streaming, !stopping, time - lastHeartbeat >= 0.2 {
                     lastHeartbeat = time
@@ -122,7 +133,67 @@ public final class BandSession {
 
     public func tick(at time: Double) -> [BandEvent] {
         dial.tick(now: time)
-        return engagementEvents(at: time)
+        var events = engagementEvents(at: time)
+        if let handRequest, time >= handRequest.deadline, !stopping {
+            self.handRequest = nil
+            hand = nil
+            events.append(BandEvent(.handednessFailure("Couldn't confirm the band hand. Reconnect and try again."), at: time))
+        }
+        return events
+    }
+
+    public func setHandedness(_ hand: BandHand, at time: Double) throws -> Data {
+        guard streamsEnabled, !stopping, self.hand != nil, handRequest == nil else {
+            throw BandProtocolError("Wait for the band to report its hand before changing it.")
+        }
+        dial = PinchDial()
+        return try requestHand(hand, reading: false, at: time)
+    }
+
+    private func requestHand(_ hand: BandHand?, reading: Bool, at time: Double) throws -> Data {
+        let id = configurationID + 1
+        // ConfigReq.is_left_handed is field 10. An empty ConfigReq reads current settings.
+        let config = reading ? Data() : BandWire.field(10, hand == .left ? 1 : 0)
+        let bytes = try encrypt(BandWire.frame(channel: configurationChannel,
+            words: configurationID == 0 ? [0x8100ce56, 0x02000314] : [],
+            payload: BandWire.field(1, id) + BandWire.field(5, config)))
+        configurationID = id
+        handRequest = HandRequest(id: id, hand: hand, reading: reading, deadline: time + 5)
+        return bytes
+    }
+
+    private func receiveHand(_ fields: ProtoFields, at time: Double, outgoing: inout Data) throws -> [BandEvent] {
+        guard let request = handRequest, try fields.integer(1) == request.id else { return [] }
+        handRequest = nil
+        guard time < request.deadline else {
+            hand = nil
+            return [BandEvent(.handednessFailure("Couldn't confirm the band hand. Reconnect and try again."), at: time)]
+        }
+        guard try fields.integer(2) == 1 else {
+            hand = nil
+            return [BandEvent(.handednessFailure("The band couldn't apply its hand setting. Reconnect and try again."), at: time)]
+        }
+        if !request.reading {
+            // Read it again independently; a successful write status alone isn't confirmation.
+            outgoing.append(try requestHand(request.hand, reading: true, at: time))
+            return []
+        }
+        guard fields.contains(6) else {
+            hand = nil
+            return [BandEvent(.handednessFailure("This band didn't report its hand setting."), at: time)]
+        }
+        let config = try ProtoFields(fields.bytes(6))
+        guard config.contains(10), try config.integer(10) <= 1 else {
+            hand = nil
+            return [BandEvent(.handednessFailure("This band didn't report its hand setting."), at: time)]
+        }
+        let reported: BandHand = try config.integer(10) == 1 ? .left : .right
+        hand = reported
+        var events = [BandEvent(.handedness(reported), at: time)]
+        if let expected = request.hand, reported != expected {
+            events.append(BandEvent(.handednessFailure("The band didn't keep the selected hand. Reconnect and try again."), at: time))
+        }
+        return events
     }
 
     /// Read the existing subscription's status when sensor traffic goes quiet.
@@ -134,6 +205,7 @@ public final class BandSession {
     public func stop() throws -> Data {
         guard !stopping else { return Data() }
         stopping = true
+        handRequest = nil
         guard transmitter != nil else { return Data() }
         return try streamRequest(id: 4, enabled: false)
     }
@@ -157,7 +229,7 @@ public final class BandSession {
         return [BandEvent(.dialState(dial.engaged), at: time)]
     }
 
-    private func input(_ frame: DataXFrame, at time: Double) throws -> [BandEvent] {
+    private func input(_ frame: DataXFrame, at time: Double, outgoing: inout Data) throws -> [BandEvent] {
         if let kind = frame.words.last {
             guard channelTypes.count < 1024 || channelTypes[frame.channel] != nil else {
                 throw BandProtocolError("Too many band input channels")
@@ -167,6 +239,10 @@ public final class BandSession {
         guard let kind = channelTypes[frame.channel] else { return [] }
         // Ignore unrelated services without trying to interpret their protobuf schema.
         guard [0x02000315, 0x0200020d, 0x0200020f, 0x02000212].contains(kind) else { return [] }
+        if kind == 0x02000315, frame.channel & 0x7fff == configurationChannel & 0x7fff {
+            guard !stopping else { return [] }
+            return try receiveHand(ProtoFields(frame.payload), at: time, outgoing: &outgoing)
+        }
         if kind == 0x02000315, frame.channel & 0x7fff != streamChannel & 0x7fff { return [] }
         let fields = try ProtoFields(frame.payload)
         if kind == 0x02000315 {

@@ -28,7 +28,7 @@ turn on **start automatically** under **band** to reconnect and enable controls 
 
 the first launch has a short setup: connect, try a swipe, practice a pinch and turn, and allow mac controls. controls stay paused while you practice; the setup dial never changes your volume or brightness. **quick setup** in the sidebar brings it back anytime. you can skip it too.
 
-setup asks which hand the band is on; you can change it under **band** later. this mirrors the illustration. native handedness configuration is still unverified, so kinesis keeps the band's existing calibration and gesture directions.
+choose your hand during setup or under **band**. kinesis reads the band's current setting when it connects. changing hands pauses mac controls, updates the band, and checks the setting again before confirming it. move the band to that wrist, then enable controls when you're ready. swipe directions come directly from the band; the app adjusts its own wrist-turn dial for the selected hand.
 
 **overview** shows your gestures, **gestures** holds the assignments, and **band** has the connection details. the appearance menu switches between light, dark, and your system setting.
 

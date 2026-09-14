@@ -2,6 +2,7 @@ import AppKit
 import SceneKit
 import Testing
 import simd
+import KinesisCore
 @testable import Kinesis
 
 @Suite(.serialized) struct HandSceneTests {

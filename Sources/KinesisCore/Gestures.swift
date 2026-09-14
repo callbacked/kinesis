@@ -1,5 +1,10 @@
 import Foundation
 
+public enum BandHand: String, CaseIterable, Identifiable, Sendable {
+    case right, left
+    public var id: String { rawValue }
+}
+
 public struct BandDevice: Codable, Identifiable, Hashable, Sendable {
     public let address: String
     public let name: String
@@ -20,6 +25,8 @@ public struct BandEvent: Sendable {
         case gesture(BandGesture)
         case dialState(Bool)
         case dialTurn(Double)
+        case handedness(BandHand)
+        case handednessFailure(String)
     }
     public let payload: Payload
     public let receivedAt: Double

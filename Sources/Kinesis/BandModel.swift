@@ -22,9 +22,10 @@ final class BandModel: ObservableObject {
             if !startsAutomatically { automaticStartPending = false }
         }
     }
-    @Published var bandHand = BandHand.right {
-        didSet { defaults.set(bandHand.rawValue, forKey: "bandHand") }
-    }
+    @Published private(set) var bandHand = BandHand.right
+    @Published private(set) var pendingHand: BandHand?
+    @Published private(set) var handConfirmed = false
+    @Published private(set) var handSettingError: String?
     @Published private(set) var showingSetup = true
     @Published private(set) var accessibilityAllowed = false
     @Published private(set) var battery: Int?
@@ -81,6 +82,14 @@ final class BandModel: ObservableObject {
 
     var bandName: String { devices.first { $0.address == selectedAddress }?.name ?? "Neural Band" }
     var canScan: Bool { !busy && !wantsConnection }
+    var canChangeHand: Bool { live && handConfirmed && pendingHand == nil }
+    var handSettingStatus: String {
+        if let handSettingError { return handSettingError }
+        if pendingHand != nil { return "switching hands…" }
+        if !live { return "connect your band to choose a hand." }
+        if !handConfirmed { return "checking your band’s hand…" }
+        return "\(bandHand.rawValue) hand · confirmed by your band"
+    }
 
     init(defaults: UserDefaults = .standard,
          connection: any BandConnection = NativeBandConnection(),
@@ -174,13 +183,15 @@ final class BandModel: ObservableObject {
         retry = nil
         pause()
         live = false
+        handConfirmed = false
+        pendingHand = nil
         phase = busy ? "Disconnecting…" : "Disconnected"
         connection.stop()
     }
 
     func toggleControls() {
         if controlsEnabled { pause(); return }
-        guard !showingSetup else { return }
+        guard !showingSetup, pendingHand == nil else { return }
         accessibilityAllowed = controls.trusted
         guard accessibilityAllowed else {
             requestAccessibility()
@@ -200,6 +211,24 @@ final class BandModel: ObservableObject {
         suspendActions()
         controlsEnabled = false
         lastAction = "Controls are paused"
+    }
+
+    func selectHand(_ hand: BandHand) {
+        guard canChangeHand, hand != bandHand else { return }
+        pause()
+        router.reset()
+        recognizedGesture = nil
+        lastDirection = nil
+        lastGesture = "Waiting for a gesture"
+        pendingHand = hand
+        handSettingError = nil
+        do {
+            try connection.setHandedness(hand)
+        } catch {
+            pendingHand = nil
+            handConfirmed = false
+            handSettingError = error.localizedDescription
+        }
     }
 
     func beginSetup() {
@@ -239,6 +268,9 @@ final class BandModel: ObservableObject {
         if case .scan = command { phase = "Finding your band…" } else { phase = "Preparing…" }
         live = false
         heartbeat = nil
+        handConfirmed = false
+        pendingHand = nil
+        handSettingError = nil
         started = clock()
         router.reset()
         suspendActions()
@@ -262,6 +294,8 @@ final class BandModel: ObservableObject {
         }
         busy = false
         live = false
+        handConfirmed = false
+        pendingHand = nil
         suspendActions()
         if wantsConnection && !quitting && !sleeping {
             scheduleReconnect()
@@ -281,6 +315,17 @@ final class BandModel: ObservableObject {
             if selectedAddress.isEmpty, let first = discovered.first { selectedAddress = first.address }
             if discovered.isEmpty { error = "No band found. Put it in pairing mode, keep it nearby, and try again." }
         case .battery(let value): battery = value
+        case .handedness(let hand):
+            guard wantsConnection, !sleeping else { return }
+            bandHand = hand
+            defaults.set(hand.rawValue, forKey: "bandHand")
+            handConfirmed = true
+            pendingHand = nil
+            handSettingError = nil
+        case .handednessFailure(let message):
+            handConfirmed = false
+            pendingHand = nil
+            handSettingError = message
         case .preparing: phase = "Preparing…"
         case .connected:
             phase = "Connected"
@@ -293,6 +338,7 @@ final class BandModel: ObservableObject {
         case .gesture(let message):
             guard wantsConnection, !sleeping, now - message.receivedAt <= 0.35, now - message.receivedAt >= -0.1 else { return }
             receivedInput()
+            guard pendingHand == nil else { return }
             if let label = message.gestureLabel, lastGesture != label { lastGesture = label }
             if !message.synthetic, ["index", "middle"].contains(message.finger) {
                 let finger = message.finger
@@ -326,15 +372,17 @@ final class BandModel: ObservableObject {
             }
             dispatch(action)
         case .dialState(let engaged):
-            guard live, abs(now - event.receivedAt) <= 0.35 else { resetDial(); return }
+            guard live, pendingHand == nil, abs(now - event.receivedAt) <= 0.35 else { resetDial(); return }
             dialEngaged = engaged
             resetDial()
             if dialEngaged && controlsEnabled {
                 dialArmed = true
                 dialGate.arm(at: event.receivedAt)
             }
-        case .dialTurn(let delta):
-            guard live, dialEngaged, abs(now - event.receivedAt) <= 0.35, delta.isFinite else { return }
+        case .dialTurn(let rotation):
+            guard live, handConfirmed, dialEngaged, abs(now - event.receivedAt) <= 0.35, rotation.isFinite else { return }
+            // The same intended turn produced the opposite gyro sign on the left wrist.
+            let delta = bandHand == .left ? -rotation : rotation
             dialTurns.send(delta)
             guard controlsEnabled, dialArmed, dialTarget != .none,
                   dialGate.allows(eventTime: event.receivedAt, now: now, live: live, trusted: controls.trusted) else { return }

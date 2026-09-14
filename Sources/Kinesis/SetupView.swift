@@ -174,10 +174,11 @@ struct SetupView: View {
                 BandArtwork().frame(height: 275)
                 VStack(spacing: 10) {
                     Text("which hand is your band on?").font(.system(size: 13, weight: .medium))
-                    Picker("Band hand", selection: $model.bandHand) {
+                    Picker("Band hand", selection: Binding(get: { model.pendingHand ?? model.bandHand }, set: { model.selectHand($0) })) {
                         ForEach(BandHand.allCases) { hand in Text(hand.rawValue).tag(hand) }
                     }.pickerStyle(.segmented).labelsHidden().frame(width: 190)
-                    Text("you can change this later.")
+                    .disabled(!model.canChangeHand)
+                    Text(model.handSettingStatus)
                         .font(.system(size: 11)).foregroundStyle(KinesisStyle.secondary)
                 }
             }
