@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="design/kinesis-links-dark.svg">
+  <img src="design/kinesis-links.svg" width="80" alt="kinesis">
+</picture>
+
 # kinesis
 
 use your meta neural band to control your mac
