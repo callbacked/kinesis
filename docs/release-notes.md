@@ -6,4 +6,6 @@ a short setup gets you connected and lets you practice. the hand lights up when 
 
 the connection, gesture decoding, and dial are all swift. no python worker, glasses, or phone in the connection.
 
-this first release is for building from source on macos 14+. the build supports apple silicon and intel. handedness changes the illustration; the band keeps its existing calibration. cursor tracking and raw semg recording aren’t part of this app.
+download the dmg and drag kinesis into applications. signed and notarized, for macos 14+ on apple silicon and intel.
+
+handedness changes the illustration; the band keeps its existing calibration. cursor tracking and raw semg recording aren’t part of this app.

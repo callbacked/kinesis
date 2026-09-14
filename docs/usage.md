@@ -2,7 +2,9 @@
 
 ## run it
 
-needs macos 14+, xcode with a swift 6 toolchain, and bluetooth.
+[download the dmg](https://github.com/callbacked/kinesis/releases/latest) and drag kinesis into applications. needs macos 14+ and bluetooth.
+
+to build from source, install xcode with a swift 6 toolchain:
 
 ```sh
 ./scripts/build.sh
@@ -74,4 +76,14 @@ swift test -Xswiftc -warnings-as-errors
 
 this checks the code, builds the app, and writes a source archive and a local app archive under `dist/release/`. local recordings, preferences, research copies, and signing credentials stay out of those archives. [release notes](release-notes.md).
 
-the current app archive is development-signed, not notarized for public downloads. build from source for now. a public binary needs developer id signing and notarization first.
+the local app archive stays separate from the public dmg. to make a public release, choose a developer id application identity and notarize the app first. `asc` uses your configured apple api credentials.
+
+```sh
+KINESIS_SIGNING_IDENTITY="Developer ID Application: your name (team id)" ./scripts/build.sh
+ditto -c -k --keepParent dist/Kinesis.app dist/Kinesis-notary.zip
+asc notarization submit --file dist/Kinesis-notary.zip --wait
+xcrun stapler staple dist/Kinesis.app
+./scripts/dmg.sh dist/Kinesis.app
+```
+
+the dmg script requires a stapled app, adds the applications shortcut, signs and notarizes the disk image, and checks gatekeeper before writing `dist/Kinesis-<version>.dmg`. both the app and the disk image carry notarization tickets for offline installation. set `KINESIS_SIGNING_IDENTITY` for this script too if more than one developer id identity is installed.

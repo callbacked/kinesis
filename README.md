@@ -18,7 +18,13 @@ native swift, built on some tinkering i did with astra in [neural-band-poc](http
 
 ## run it
 
-macos 14+, xcode with swift 6, and a neural band.
+[download kinesis](https://github.com/callbacked/kinesis/releases/latest), open the dmg, and drag it into applications. needs macos 14+ and a neural band. works on apple silicon and intel.
+
+find your band in setup, connect, and allow bluetooth + accessibility when prompted. enable controls and you're in.
+
+## build it
+
+xcode with swift 6.
 
 ```sh
 git clone https://github.com/callbacked/kinesis.git
@@ -27,6 +33,4 @@ cd kinesis
 open dist/Kinesis.app
 ```
 
-find your band in setup, connect, and allow bluetooth + accessibility when prompted. enable controls and you're in. quit kinesis before rebuilding.
-
-the build supports apple silicon and intel. build from source for now; a public download needs signing and notarization.
+quit kinesis before rebuilding.
