@@ -17,10 +17,11 @@ swipe between desktops, open mission control, control your music, and pinch + tu
 native swift, built on some tinkering i did with astra in [neural-band-poc](https://github.com/callbacked/neural-band-poc), so naturally i wanted to harness it to make it do something useful
 
 ## run it
+**be sure to unpair your band from the meta app before you get started**
 
 [download kinesis](https://github.com/callbacked/kinesis/releases/latest), open the dmg, and drag it into applications. needs macos 14+ and a neural band. works on apple silicon and intel.
 
-find your band in setup, connect, and allow bluetooth + accessibility when prompted. enable controls and you're in.
+set your band in pairing mode, connect, and allow bluetooth + accessibility when prompted. enable controls and you're in.
 
 ## build it
 
