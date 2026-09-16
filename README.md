@@ -16,6 +16,8 @@ swipe between desktops, open mission control, control your music, and pinch + tu
 
 built on some tinkering i did with astra in [neural-band-poc](https://github.com/callbacked/neural-band-poc) (feel free to go through that repo to do your own thing), so naturally i wanted to harness it to make it do something useful
 
+some things may act quirky or not work at all, if that is the case i would love to know why, but this is all highly experimental
+
 ## run it
 **be sure to unpair your band from the meta app before you get started**
 
