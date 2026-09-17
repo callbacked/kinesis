@@ -35,3 +35,7 @@ open dist/Kinesis.app
 ```
 
 quit kinesis before rebuilding.
+
+## license
+
+[mit](LICENSE).

@@ -2,4 +2,4 @@ Meta Neural Band product image. Credit: Meta, published by Gizmodo.
 https://gizmodo.com/metas-smart-glasses-now-have-a-screen-and-a-magic-wristband-2000659760
 https://gizmodo.com/app/uploads/2025/09/Meta-Neural-Band.png
 
-Background removed for the app illustration. This image is not covered by the hand mesh's MIT license.
+Background removed for the app illustration. This third-party image is excluded from Kinesis's MIT license.
