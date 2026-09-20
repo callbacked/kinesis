@@ -1,7 +1,7 @@
 import SwiftUI
 import KinesisCore
 
-/// The band's own page. The pane already shows what the band is and how it is,
+/// The band's own page. The band's column already shows what the band is and how it is,
 /// so this page holds only what you decide about it, as rows on open ground.
 struct BandPage: View {
     @ObservedObject var model: BandModel

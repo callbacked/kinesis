@@ -8,6 +8,7 @@ struct OverviewPage: View {
     @ObservedObject var model: BandModel
     @State private var dialRouter = DialRouter()
     @State private var dialAngle = 0.0
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -36,10 +37,16 @@ struct OverviewPage: View {
                 Spacer(minLength: 0)
                 // The ring sits on top of the hand's view. Behind it, the view's square
                 // hid all of the ring but the parts that poked out past its corners.
-                HandSceneView(hand: model.bandHand, highlight: handHighlight, gesture: model.recognizedGesture,
-                              revision: model.gestureCount, sustained: model.pinchedFinger != nil || model.dialEngaged,
-                              roll: model.dialEngaged ? dialAngle * 0.55 : 0)
+                HandView(scene: HandSceneView(hand: model.bandHand, highlight: handHighlight, gesture: model.recognizedGesture,
+                                              revision: model.gestureCount, sustained: model.pinchedFinger != nil || model.dialEngaged,
+                                              roll: model.dialEngaged ? dialAngle * 0.55 : 0))
                     .frame(width: 350, height: 350)
+                    // The hand's own pool of light on the field.
+                    .background {
+                        // White on white needs no more light. On the dark field the hand gets a pool of its own.
+                        Circle().fill(RadialGradient(colors: [KinesisStyle.pool, .clear], center: .center, startRadius: 30, endRadius: 190))
+                            .padding(-15).opacity(scheme == .dark ? 1 : 0)
+                    }
                     .overlay { DialRing(angle: dialAngle, engaged: model.dialEngaged && model.live).allowsHitTesting(false) }
             }
             VStack(alignment: .leading, spacing: 0) {
@@ -99,10 +106,10 @@ private struct GestureCaption: View {
             VStack(alignment: .leading, spacing: 9) {
                 // The words swap at once. The glow carries the feedback, so a fast
                 // second gesture never has a half-finished transition to interrupt.
-                (Text(words.before).foregroundStyle(KinesisStyle.secondary)
+                (Text(words.before).foregroundStyle(KinesisStyle.secondary).fontWeight(.light)
                     + Text(words.strong).foregroundStyle(KinesisStyle.ink).fontWeight(.medium)
-                    + Text(words.after).foregroundStyle(KinesisStyle.secondary))
-                    .font(.system(size: 25)).tracking(-0.6)
+                    + Text(words.after).foregroundStyle(KinesisStyle.secondary).fontWeight(.light))
+                    .font(.system(size: 28)).tracking(-0.7)
                 if let action {
                     HStack(spacing: 7) {
                         Image(systemName: "arrow.turn.down.right").font(.system(size: 10, weight: .semibold))

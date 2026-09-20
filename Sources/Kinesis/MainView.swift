@@ -7,8 +7,8 @@ enum AppPage: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// The window is two panes. The dark one is the band. The light one is what
-/// you do with it, one page at a time.
+/// The window is one field. The band's column sits on the left of it. The rest is
+/// what you do with the band, one page at a time.
 struct MainView: View {
     @ObservedObject var model: BandModel
     @State private var page: AppPage
@@ -43,7 +43,7 @@ struct MainView: View {
             }
         }
         .frame(minWidth: 920, minHeight: 660)
-        .background(KinesisStyle.paper)
+        .background(Field())
         .foregroundStyle(KinesisStyle.ink)
         .tint(KinesisStyle.ink)
         .preferredColorScheme(appearance.colorScheme)

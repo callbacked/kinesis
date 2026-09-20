@@ -213,7 +213,7 @@ struct TextTabs<Value: Hashable>: View {
     }
 }
 
-/// A value over its name, the way the band pane reports battery and link.
+/// A value over its name, the way the band's column reports battery and gestures.
 struct Readout: View {
     let symbol: String
     let value: String
@@ -225,13 +225,13 @@ struct Readout: View {
                 Image(systemName: symbol).font(.system(size: 12, weight: .medium))
                 Text(value).font(.system(size: 15, weight: .medium)).monospacedDigit()
                     .contentTransition(.numericText())
-            }.foregroundStyle(.white.opacity(0.92))
-            Text(label).font(KinesisType.micro).foregroundStyle(.white.opacity(0.42))
+            }.foregroundStyle(KinesisStyle.ink.opacity(0.92))
+            Text(label).font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.85))
         }.accessibilityElement(children: .combine)
     }
 }
 
-/// A label over its value in the light pane: what it is in ink, how it is in grey.
+/// A label over its value on a page: what it is in ink, how it is in grey.
 struct Pairing: View {
     let label: String
     let value: String

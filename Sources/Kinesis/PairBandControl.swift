@@ -27,7 +27,7 @@ struct PairingFlowView: View {
     enum Layout { case leading, centered }
     let state: PairingPresentation
     var layout = Layout.leading
-    /// The band pane carries the pair button in the window. Setup has no pane, so the flow does.
+    /// The band's column carries the pair button in the window. Setup has no column, so the flow does.
     var showsButton = true
     /// Setup greets a fresh band with its own line instead of "pair your band".
     var idleHeadline: String?
@@ -43,7 +43,7 @@ struct PairingFlowView: View {
     }
 
     var body: some View {
-        // The band itself lives in the pane and on setup's stage, never here.
+        // The band itself lives in its column and on setup's stage, never here.
         VStack(alignment: centered ? .center : .leading, spacing: 0) {
             if let name = state.bandName, !centered {
                 Text(name.lowercased()).font(KinesisType.micro)
@@ -66,7 +66,7 @@ struct PairingFlowView: View {
                     Button(action: pair) {
                         HStack(spacing: 9) {
                             if state.working {
-                                ProgressView().controlSize(.mini).tint(KinesisStyle.paper)
+                                ProgressView().controlSize(.mini).tint(KinesisStyle.blue)
                             } else {
                                 Image(systemName: state.failed == nil ? "dot.radiowaves.left.and.right" : "arrow.clockwise")
                                     .font(.system(size: 11))

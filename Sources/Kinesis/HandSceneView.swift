@@ -19,6 +19,27 @@ enum HandViewpoint: Sendable {
     case overview, teaching
 }
 
+/// Offscreen renders cannot draw SceneKit, so the render gallery hands in a picture of the hand.
+private struct HandStandInKey: EnvironmentKey {
+    static let defaultValue: NSImage? = nil
+}
+
+extension EnvironmentValues {
+    var handStandIn: NSImage? {
+        get { self[HandStandInKey.self] }
+        set { self[HandStandInKey.self] = newValue }
+    }
+}
+
+/// The hand on the page: the live scene, or its stand-in when there is one.
+struct HandView: View {
+    let scene: HandSceneView
+    @Environment(\.handStandIn) private var standIn
+    var body: some View {
+        if let standIn { Image(nsImage: standIn).resizable().scaledToFit() } else { scene }
+    }
+}
+
 struct HandSceneView: NSViewRepresentable {
     var hand = BandHand.right
     var highlight = HandHighlight.none
@@ -101,11 +122,13 @@ struct HandSceneView: NSViewRepresentable {
                     float rim = pow(1.0 - abs(dot(normalize(_surface.normal), normalize(_surface.view))), 2.0);
                     float shade = 0.5 + 0.5 * max(0.0, dot(normalize(_surface.normal), normalize(float3(-0.4, 0.6, 1.0))));
                     float glow = max(in.tipInfluence.x * thumbLight, max(in.tipInfluence.y * indexLight, in.tipInfluence.z * middleLight));
-                    // A pale clay hand. On light paper it needs real tone to read, so its
-                    // shadows go cool grey and its edges darken a little.
-                    float3 paleLight = mix(float3(0.915, 0.92, 0.93), float3(0.53, 0.56, 0.62), 1.0 - shade);
+                    // A white hand on the light field, the way the reference draws it: nearly flat,
+                    // with just enough cool shadow and edge to read. On the dark field it is
+                    // porcelain in low light, a few steps above the ground, never a white cutout.
+                    float3 paleLight = mix(float3(0.985, 0.988, 0.992), float3(0.70, 0.735, 0.79), 1.0 - shade);
                     paleLight *= 1.0 - 0.3 * rim;
-                    float3 paleDark = mix(float3(0.86, 0.88, 0.90), float3(0.42, 0.45, 0.49), 1.0 - shade);
+                    float3 paleDark = mix(float3(0.60, 0.65, 0.70), float3(0.20, 0.235, 0.27), 1.0 - shade);
+                    paleDark += 0.10 * rim;
                     float3 skin = mix(paleLight, paleDark, darkAppearance);
                     float3 lit = mix(float3(0.10, 0.50, 0.96), float3(0.36, 0.78, 1.0), darkAppearance);
                     _surface.diffuse.rgb = mix(skin, lit, glow * 0.92);
@@ -113,7 +136,10 @@ struct HandSceneView: NSViewRepresentable {
                     """, .fragment: """
                     #pragma transparent
                     #pragma body
-                    _output.color = float4(_surface.diffuse.rgb * _surface.diffuse.a, _surface.diffuse.a);
+                    // The scene is drawn in linear light, but the window blends this view in display
+                    // space. Premultiplying in display space keeps the wrist's fade the hand's own
+                    // colour all the way out. A plain multiply left a bright, hard-edged fringe.
+                    _output.color = float4(_surface.diffuse.rgb * pow(_surface.diffuse.a, 2.2), _surface.diffuse.a);
                     """]
                 setIllumination(.zero)
                 let rig = HandRig(mesh: mesh, material: material)
@@ -183,10 +209,8 @@ struct HandSceneView: NSViewRepresentable {
         }
 
         func setBackground(dark: Bool) {
-            // The page's own paper color, so the hand floats on it with no box around it.
-            scene.background.contents = dark
-                ? NSColor(white: 0.085, alpha: 1)
-                : NSColor(red: 0.96, green: 0.955, blue: 0.94, alpha: 1)
+            // No ground of its own: the window's field shows through, so the hand floats on it.
+            scene.background.contents = NSColor.clear
             material.setValue(dark ? 1.0 : 0.0, forKey: "darkAppearance")
         }
 

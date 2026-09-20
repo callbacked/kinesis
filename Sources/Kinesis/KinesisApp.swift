@@ -64,7 +64,7 @@ private struct BandMenu: View {
         Text("\(model.bandName.lowercased()) · \(model.phase.lowercased())")
         if let battery = model.battery { Text("battery \(battery)%") }
         Divider()
-        // The same next step the band pane offers, so the menu never disagrees with the window.
+        // The same next step the band's column offers, so the menu never disagrees with the window.
         switch model.nextAction {
         case .pair:
             Button("pair band…") { open() }

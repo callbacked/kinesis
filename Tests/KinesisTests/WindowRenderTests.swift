@@ -1,4 +1,6 @@
 import AppKit
+import Metal
+import SceneKit
 import SwiftUI
 import Testing
 import KinesisCore
@@ -68,7 +70,7 @@ private struct AllowedControls: MacControls {
     }
 
     func setup(_ model: BandModel, step: Int) -> some View {
-        SetupView(model: model, step: step).background(KinesisStyle.paper).foregroundStyle(KinesisStyle.ink)
+        SetupView(model: model, step: step).background(Field()).foregroundStyle(KinesisStyle.ink)
     }
 
     let windows: [(String, AnyView)] = [
@@ -83,11 +85,23 @@ private struct AllowedControls: MacControls {
         ("setup-2-turn", AnyView(setup(try model(paired: true, live: true), step: 2))),
         ("setup-3-ready", AnyView(setup(try model(paired: true, live: true, trusted: false), step: 3))),
     ]
+    // SceneKit does not draw inside ImageRenderer, so the hand is drawn on its own and handed in.
+    func hand(dark: Bool, teaching: Bool) throws -> NSImage {
+        let coordinator = HandSceneView.Coordinator(viewpoint: teaching ? .teaching : .overview)
+        coordinator.setBackground(dark: dark)
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let renderer = SCNRenderer(device: device, options: nil)
+        renderer.scene = coordinator.scene
+        renderer.pointOfView = coordinator.camera
+        return renderer.snapshot(atTime: 0, with: CGSize(width: 1050, height: 1050), antialiasingMode: .multisampling4X)
+    }
     for (name, window) in windows {
         for (mode, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light), ("dark", .darkAqua, .dark)] {
             var png: Data?
+            let standIn = try hand(dark: scheme == .dark, teaching: name.hasPrefix("setup"))
             NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
-                let renderer = ImageRenderer(content: window.frame(width: 980, height: 730).environment(\.colorScheme, scheme))
+                let renderer = ImageRenderer(content: window.frame(width: 980, height: 730).environment(\.colorScheme, scheme)
+                    .environment(\.handStandIn, standIn))
                 renderer.scale = 1.5
                 if let image = renderer.cgImage {
                     png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
