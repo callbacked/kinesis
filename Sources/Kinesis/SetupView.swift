@@ -51,7 +51,7 @@ struct SetupView: View {
                     Text(step == 0 ? "your mac.\nin good hands." : step == 1 ? "small gesture.\nbig move." : step == 2 ? "give it\na little turn." : "take it\nfrom here.")
                         .font(.system(size: 49, weight: .regular)).tracking(-2.2).lineSpacing(-1)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(step == 0 ? "your band brings a few new shortcuts.\nlet’s get you connected." : step == 1 ? "slide your thumb across your index finger.\ntry a swipe in any direction." : step == 2 ? "pinch your thumb and index finger.\nturn your wrist, then release." : "move between desktops, turn up your music,\nand keep your hands where they are.")
+                    Text(step == 0 ? "your band brings a few new shortcuts.\npairing takes a minute and one meta sign-in." : step == 1 ? "slide your thumb across your index finger.\ntry a swipe in any direction." : step == 2 ? "pinch your thumb and index finger.\nturn your wrist, then release." : "move between desktops, turn up your music,\nand keep your hands where they are.")
                         .font(.system(size: 14)).foregroundStyle(KinesisStyle.secondary).lineSpacing(5)
                     Group {
                         if step == 0 {
@@ -59,7 +59,7 @@ struct SetupView: View {
                             // pipeline scans, connects, and claims when the
                             // band needs it. It hides once the band streams.
                             if !model.live {
-                                PairBandControl(model: model)
+                                PairBandControl(model: model, compact: true)
                             }
                             ConnectionBadge(live: model.live, text: model.phase)
                         } else if step == 1 {

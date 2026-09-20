@@ -100,14 +100,33 @@ id, device id, universe, obtained-at time); token material never reaches logs.
 - "use a different account" sits next to the pairing progress while a saved
   session is driving a claim. it drops only the session (`switchMetaAccount`),
   so the band binds to whichever account signs in next.
-- "forget band" is one confirmed step (`forgetEverything`): it clears the
-  remembered band, the stored identity, and the meta session. the band stays
-  enrolled server-side; pairing again rebinds it.
-- pairing surfaces stay inline next to the button: progress text while a run
-  is in flight, a hold-button hint while a claim-needing run scans (kept up
-  after scans come up empty twice in a row), and one lowercase line on
-  failure with the button doubling as retry. all of it hides while the band
-  is connected, busy, or streaming.
+- "forget this band" is one confirmed step (`forgetEverything`): it clears the
+  remembered band and the stored identity. the dialog offers a second choice
+  that also drops the meta session; the plain one keeps it, so pairing again
+  needs no sign-in. the band stays enrolled server-side; pairing again rebinds
+  it. the band page's "meta account" row signs out on its own
+  (`signOutOfMeta`), and is refused while a pair run owns the session.
+- the pairing surface (`PairingFlowView`) draws one value,
+  `PairingPresentation`, which `BandModel.pairing` derives from the route, the
+  enrollment stage, and the failure. it shows four steps (find, sign in,
+  claim, ready), the live one marked. the reconnect after a claim is "ready",
+  never a second "find". a failed run marks the step it stopped at
+  (`pairFailedStep`) and names it in the headline; the wrong-account failure
+  links to meta's factory reset guide. the band artwork calls out the button
+  while a run scans and after an empty scan. a run can be cancelled at any
+  stage (`cancelPairing`). all of it hides while the band is connected, busy,
+  or streaming.
+- macos pairs with an unbonded band when kinesis reads the input channel, and
+  that waits on a request the person must accept. a read that stays open for
+  1.5 seconds emits `systemPairingPending`: the surface says so, the startup
+  deadline extends to cover the 30-second pairing window, and a security error
+  from that read is reworded into what to do next.
+- the sign-in sheet opens on a short preface (why, what is stored, how to undo
+  it) and contacts meta only after "continue to meta". while the page is up
+  the sheet shows its current host.
+- `KINESIS_RENDER_DIR=<dir> swift test --filter pairingStatesRenderForReview`
+  draws every pairing state and the sign-in preface to png files, light and
+  dark, for a visual check without a band.
 
 ## enrollment ceremony (planned)
 

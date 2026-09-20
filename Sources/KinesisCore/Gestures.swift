@@ -29,6 +29,8 @@ public struct BandEvent: Sendable {
         case handednessFailure(String)
         case ceremonyHTTP(CeremonyHTTPRequest)
         case ceremonyStage(String)
+        /// The input channel read is waiting on a system Bluetooth pairing request.
+        case systemPairingPending
     }
     public let payload: Payload
     public let receivedAt: Double

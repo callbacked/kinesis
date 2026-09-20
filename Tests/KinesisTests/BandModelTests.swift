@@ -935,6 +935,87 @@ private struct FakePairClient: BandPairClient {
     await model.shutdown()
 }
 
+@Test @MainActor func aPairRunReportsItsStagesTheSystemPairingRequestAndTheClaimBeat() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: "test-band", name: "Meta Band")), forKey: "band")
+    defer { BandIdentity.delete(for: "test-band") }
+    let connection = RecordedConnection()
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "token", userID: "1")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    #expect(model.pairing.headline == "pair it again" && model.pairing.current == nil)
+    model.pairBand()
+    #expect(model.pairing.current == .claim && model.pairing.claimProgress == 0 && model.pairing.offersAccountSwitch)
+    // macOS asks to pair before the band answers anything.
+    connection.send(.systemPairingPending)
+    #expect(model.awaitingSystemPairing && model.pairing.needsSystemPairing)
+    #expect(model.phase == "Accept the Bluetooth request…")
+    connection.send(.ceremonyStage("establishing trust"))
+    #expect(model.pairing.claimProgress == 4)
+    connection.send(.connected)
+    #expect(!model.awaitingSystemPairing)
+    try await waitUntil { connection.requests == ["enroll test-band", "connect test-band"] }
+    // The settling reconnect is the last step of this run.
+    #expect(model.pairing.current == .ready && !model.justPaired)
+    connection.send(.connected)
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.justPaired && model.pairing.current == nil && model.pairFailedStep == nil)
+    await model.shutdown()
+}
+
+@Test @MainActor func aFailedPairRunRemembersWhereItStopped() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let connection = RecordedConnection()
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "token", userID: "1")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    model.pairBand()
+    connection.send(.devices([]))
+    connection.finish()
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.pairFailedStep == .find && model.pairing.failed == .find)
+    #expect(model.pairing.headline == "couldn’t find your band" && model.pairing.holdHint == .insist)
+    // A claim that the band refuses fails at the claim step.
+    model.pairBand()
+    connection.send(.devices([BandDevice(address: "found-band", name: "Meta Band", rssi: -40)]))
+    connection.finish()
+    try await waitUntil { connection.requests == ["scan", "scan", "enroll found-band"] }
+    #expect(model.pairFailedStep == nil)
+    connection.finish(error: KinesisError(message: OwnershipCeremony.failureMessage(0x1042)))
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.pairFailedStep == .claim && model.pairing.headline == "couldn’t claim your band")
+    #expect(model.pairing.help?.url == PairingPresentation.factoryResetGuide)
+    await model.shutdown()
+}
+
+@Test @MainActor func cancelPairingEndsARunAndSigningOutKeepsTheBand() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let connection = RecordedConnection()
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "token", userID: "1")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    model.pairBand()
+    #expect(model.pairing.current == .find && connection.requests == ["scan"])
+    // Signing out is refused mid-run; the run owns the session.
+    model.signOutOfMeta()
+    #expect(model.hasSavedMetaSession)
+    model.cancelPairing()
+    try await waitUntil { !model.busy }
+    #expect(!model.pairInProgress && model.pairFailure == nil && model.canPair && model.phase == "Disconnected")
+    model.signOutOfMeta()
+    #expect(!model.hasSavedMetaSession && store.saved == nil)
+    await model.shutdown()
+}
+
 @Test @MainActor func forgettingTheBandCanKeepTheMetaSignIn() async throws {
     let suite = "kinesis-tests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))

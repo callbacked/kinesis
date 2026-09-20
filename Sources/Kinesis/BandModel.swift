@@ -58,6 +58,12 @@ final class BandModel: ObservableObject {
     @Published private(set) var pairFailure: String?
     /// Consecutive pair-flow scans that found nothing.
     @Published private(set) var emptyScans = 0
+    /// The stage a failed pair run stopped at, so the surface can mark it.
+    @Published private(set) var pairFailedStep: PairStep?
+    /// macOS is waiting for the user to accept its Bluetooth pairing request.
+    @Published private(set) var awaitingSystemPairing = false
+    /// True for a few seconds after a claim lands, for the band page's success beat.
+    @Published private(set) var justPaired = false
     @Published private(set) var battery: Int?
     @Published private(set) var lastGesture = "Waiting for a gesture"
     @Published private(set) var lastDirection: SwipeDirection?
@@ -108,6 +114,8 @@ final class BandModel: ObservableObject {
     private var started = 0.0
     private var retry: Task<Void, Never>?
     private var scanPending = false
+    private var claimedThisRun = false
+    private var celebration: Task<Void, Never>?
     private var ticker: AnyCancellable?
     private var sleepObserver: AnyCancellable?
     private var wakeObserver: AnyCancellable?
@@ -290,6 +298,7 @@ final class BandModel: ObservableObject {
             hasSavedMetaSession = false
         }
         pairFailure = nil
+        pairFailedStep = nil
         emptyScans = 0
         connectionLog.notice("Forgot the band and its identity; Meta session kept: \(keepMetaSession, privacy: .public)")
     }
@@ -310,6 +319,31 @@ final class BandModel: ObservableObject {
 
     // MARK: pairing
 
+    /// The pairing surface reads only this value.
+    var pairing: PairingPresentation {
+        PairingPresentation(PairingInput(
+            route: pairRoute, stage: enrollmentStage, failure: pairFailure, failedStep: pairFailedStep,
+            emptyScans: emptyScans, hasRememberedBand: !selectedAddress.isEmpty,
+            claimedThisRun: claimedThisRun, awaitingSystemPairing: awaitingSystemPairing,
+            hasSavedSession: hasSavedMetaSession, canPair: canPair))
+    }
+
+    /// Stops a pair run at any stage. A run that never reached the band just ends.
+    func cancelPairing() {
+        guard pairRoute != .none || enrollmentStage != .idle else { return }
+        if enrollmentStage != .idle { cancelEnrollment() }
+        pairRoute = .none
+        claimedThisRun = false
+        disconnect()
+    }
+
+    /// Removes the saved Meta session. The band and its key stay.
+    func signOutOfMeta() {
+        guard pairRoute == .none, enrollmentStage == .idle else { return }
+        sessionStore.deleteSession()
+        hasSavedMetaSession = false
+    }
+
     /// The whole pipeline behind the band page's one button: scan when
     /// nothing is remembered, connect, and evaluate the band's response. A
     /// stored identity unlocks on connect. A mismatch, a persistent legacy
@@ -320,6 +354,8 @@ final class BandModel: ObservableObject {
         disconnect()
         error = nil
         pairFailure = nil
+        pairFailedStep = nil
+        claimedThisRun = false
         pendingRelogin = false
         pairAttempts = 0
         if selectedAddress.isEmpty {
@@ -387,6 +423,7 @@ final class BandModel: ObservableObject {
     }
 
     func finishEnrollment() {
+        claimedThisRun = true
         enrollmentStage = .done
         enrollSession = nil
         disconnect()
@@ -551,6 +588,7 @@ final class BandModel: ObservableObject {
         }
         activeOperation = nil
         enrollSession = nil
+        awaitingSystemPairing = false
         busy = false
         live = false
         handConfirmed = false
@@ -571,16 +609,18 @@ final class BandModel: ObservableObject {
 
     /// The pair pipeline's decision after one connection attempt ends.
     private func advancePairRoute(_ failure: Error?, operation: BandOperation) {
+        let step = pairing.current
         switch pairRoute {
         case .none:
             break
         case .scanning:
             pairRoute = .none
-            if let failure { failPair(failure.localizedDescription); return }
+            if let failure { failPair(failure.localizedDescription, at: step); return }
             guard !selectedAddress.isEmpty else {
                 emptyScans += 1
                 phase = "Disconnected"
                 pairFailure = "no band found. put the band in pairing mode and pair again."
+                pairFailedStep = .find
                 return
             }
             emptyScans = 0
@@ -603,7 +643,7 @@ final class BandModel: ObservableObject {
                 }
             } else {
                 pairRoute = .none
-                failPair(failure.localizedDescription)
+                failPair(failure.localizedDescription, at: step)
             }
         case .enrolling:
             if enrollmentStage == .login { return } // waiting for a sign-in
@@ -614,7 +654,7 @@ final class BandModel: ObservableObject {
             }
             if let message = enrollmentStage.failedText ?? failure?.localizedDescription {
                 pairRoute = .none
-                failPair(message)
+                failPair(message, at: step)
                 return
             }
             // The ceremony finished and the band streams with its new key;
@@ -623,8 +663,10 @@ final class BandModel: ObservableObject {
         }
     }
 
-    private func failPair(_ message: String) {
+    private func failPair(_ message: String, at step: PairStep?) {
         pairFailure = message.lowercased()
+        pairFailedStep = step ?? .find
+        claimedThisRun = false
         enrollmentStage = .idle
         phase = "Disconnected"
     }
@@ -650,11 +692,24 @@ final class BandModel: ObservableObject {
     /// A successful connect during a pair run: the band is usable, so the
     /// page moves to its paired surface and keeps the connection managed.
     private func completePairing() {
+        if claimedThisRun { celebrate() }
+        claimedThisRun = false
+        pairFailedStep = nil
         pairRoute = .none
         pairFailure = nil
         enrollmentStage = .idle
         wantsConnection = true
         retries = 0
+    }
+
+    private func celebrate() {
+        celebration?.cancel()
+        justPaired = true
+        celebration = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            self?.justPaired = false
+        }
     }
 
     private func receive(_ event: BandEvent) {
@@ -683,11 +738,16 @@ final class BandModel: ObservableObject {
             pendingHand = nil
             handSettingError = message
         case .preparing: phase = "Preparing…"
+        case .systemPairingPending:
+            awaitingSystemPairing = true
+            phase = "Accept the Bluetooth request…"
         case .connected:
             phase = "Connected"
             retries = 0
             error = nil
+            awaitingSystemPairing = false
             pairFailure = nil
+            pairFailedStep = nil
             bandRejectsIdentity = false
             connectRejections = 0
             if case .enroll = activeOperation, enrollmentStage.isRunning {

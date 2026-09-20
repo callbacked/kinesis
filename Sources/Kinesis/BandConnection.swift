@@ -57,6 +57,8 @@ final class NativeBandConnection: NSObject, BandConnection,
     private var disconnecting = false
     private var failure: Error?
     private var stage = "idle"
+    private var inputReadStartedAt: Double?
+    private var systemPairingNoted = false
     private var identityRejected: Set<String> = []
     private var lease: Int32 = -1
     private var activity: NSObjectProtocol?
@@ -177,6 +179,14 @@ final class NativeBandConnection: NSObject, BandConnection,
             return
         }
         guard !disconnecting else { return }
+        if !stopping, !systemPairingNoted, let started = inputReadStartedAt, now - started >= 1.5 {
+            // This read answers in milliseconds on a bonded link. A slow one means
+            // macOS is pairing, which waits on a request the user has to accept.
+            systemPairingNoted = true
+            deadline = max(deadline, now + 40)
+            log.notice("Input channel read is waiting; macOS is likely asking to pair")
+            emit(BandEvent(.systemPairingPending))
+        }
         if !stopping, let batteryCharacteristic, now >= nextBatteryRead {
             nextBatteryRead = now + 60
             peripheral?.readValue(for: batteryCharacteristic)
@@ -290,7 +300,10 @@ final class NativeBandConnection: NSObject, BandConnection,
         if service.uuid == serviceID, service.characteristics?.contains(where: { $0.uuid == psmID }) != true {
             fail(KinesisError(message: "Band input channel is unavailable")); return
         }
-        if service.uuid == serviceID { stage = "reading input channel" }
+        if service.uuid == serviceID {
+            stage = "reading input channel"
+            inputReadStartedAt = now
+        }
         for characteristic in service.characteristics ?? [] {
             if characteristic.uuid == batteryID {
                 batteryCharacteristic = characteristic
@@ -308,7 +321,12 @@ final class NativeBandConnection: NSObject, BandConnection,
             }
             return
         }
-        if let error { fail(error); return }
+        inputReadStartedAt = nil
+        if let error {
+            let native = error as NSError
+            log.error("Input channel read failed: \(native.domain, privacy: .public) \(native.code, privacy: .public)")
+            fail(Self.explainingPairing(error)); return
+        }
         guard characteristic.uuid == psmID, let bytes = characteristic.value, bytes == Data([255, 0]) else {
             fail(KinesisError(message: "Unsupported band input channel")); return
         }
@@ -427,6 +445,16 @@ final class NativeBandConnection: NSObject, BandConnection,
         disconnect()
     }
 
+    /// CoreBluetooth reports a declined, missed, or failed system pairing as an
+    /// ATT security error. The raw text tells the user nothing they can act on.
+    static func explainingPairing(_ error: Error) -> Error {
+        let native = error as NSError
+        let securityCodes = [CBATTError.insufficientAuthentication.rawValue, CBATTError.insufficientEncryption.rawValue,
+                             CBATTError.insufficientAuthorization.rawValue]
+        guard native.domain == CBATTErrorDomain, securityCodes.contains(native.code) else { return error }
+        return KinesisError(message: "macOS didn't finish pairing with your band. Pair again and accept the Bluetooth request when it appears. If none appears, restart your Mac.")
+    }
+
     private func recordFailure(_ error: Error) {
         failure = error
         let nativeError = error as NSError
@@ -477,6 +505,8 @@ final class NativeBandConnection: NSObject, BandConnection,
         outgoing.removeAll()
         operation = nil
         stage = "idle"
+        inputReadStartedAt = nil
+        systemPairingNoted = false
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
         if lease >= 0 { flock(lease, LOCK_UN); close(lease); lease = -1 }

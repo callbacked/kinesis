@@ -293,6 +293,15 @@ private struct BandSettingsView: View {
                         Toggle("Start automatically", isOn: $model.startsAutomatically)
                             .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(KinesisStyle.blue)
                     }
+                    Rectangle().fill(KinesisStyle.line).frame(height: 1)
+                    SettingRow(title: "meta account",
+                               detail: model.hasSavedMetaSession ? "signed in. kinesis uses it only to claim a band."
+                                   : "signed out. pairing a new band asks you to sign in once.") {
+                        if model.hasSavedMetaSession {
+                            Button("sign out") { model.signOutOfMeta() }.buttonStyle(KinesisButtonStyle())
+                                .disabled(model.pairInProgress)
+                        }
+                    }
                 }.padding(.horizontal, 18).background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 14))
                 PermissionCard(model: model)
             }
@@ -322,11 +331,15 @@ private struct BandSettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text(model.bandName.lowercased()).font(.system(size: 21)).tracking(-0.5)
                 ConnectionBadge(live: model.live, text: model.phase)
-                if let battery = model.battery {
+                if model.justPaired {
+                    Label("claimed. this band is yours on this Mac.", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(KinesisStyle.green)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else if let battery = model.battery {
                     Text("\(battery)% battery" + (model.live ? "" : " when last connected"))
                         .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
                 }
-            }
+            }.animation(.easeOut(duration: 0.3), value: model.justPaired)
             Spacer(minLength: 12)
             if model.live || model.wantsConnection {
                 Button("disconnect") { model.disconnect() }.buttonStyle(KinesisButtonStyle())
