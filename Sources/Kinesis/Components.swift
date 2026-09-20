@@ -1,4 +1,5 @@
 import SwiftUI
+import KinesisCore
 
 /// One type scale for the whole app. Large and light for what matters, small
 /// and grey for what supports it.
@@ -242,5 +243,26 @@ struct Pairing: View {
                 .foregroundStyle(live ? KinesisStyle.blue : KinesisStyle.ink)
                 .contentTransition(.numericText()).lineLimit(1)
         }.accessibilityElement(children: .combine)
+    }
+}
+
+/// Hands its content the gesture that was just performed, for about a second.
+/// The overview and the gestures page both light the matching row with it.
+struct GestureLight<Content: View>: View {
+    @ObservedObject var model: BandModel
+    @ViewBuilder var content: (RecognizedGesture?) -> Content
+    @State private var lit: RecognizedGesture?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        content(lit)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: lit)
+            .onChange(of: model.gestureCount) { _, _ in lit = model.live ? model.recognizedGesture : nil }
+            .task(id: model.gestureCount) {
+                guard lit != nil else { return }
+                try? await Task.sleep(for: .milliseconds(900))
+                guard !Task.isCancelled else { return }
+                lit = nil
+            }
     }
 }

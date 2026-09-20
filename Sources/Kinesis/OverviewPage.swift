@@ -59,7 +59,6 @@ struct OverviewPage: View {
 /// so the page answers "did the Mac get that?" without a word.
 private struct GestureMap: View {
     @ObservedObject var model: BandModel
-    @State private var lit: RecognizedGesture?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Entry: Identifiable {
@@ -70,7 +69,7 @@ private struct GestureMap: View {
         let active: Bool
     }
 
-    private var entries: [Entry] {
+    private func entries(lit: RecognizedGesture?) -> [Entry] {
         var rows: [Entry] = []
         for direction in SwipeDirection.allCases {
             let action = model.mappings[direction] ?? .none
@@ -92,6 +91,11 @@ private struct GestureMap: View {
     }
 
     var body: some View {
+        GestureLight(model: model) { lit in map(entries(lit: lit)) }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.dialEngaged)
+    }
+
+    private func map(_ entries: [Entry]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("your gestures").font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary).padding(.leading, 12)
             if entries.isEmpty {
@@ -113,15 +117,6 @@ private struct GestureMap: View {
                     .accessibilityElement(children: .combine)
                 }
             }
-        }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: lit)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.dialEngaged)
-        .onChange(of: model.gestureCount) { _, _ in lit = model.live ? model.recognizedGesture : nil }
-        .task(id: model.gestureCount) {
-            guard lit != nil else { return }
-            try? await Task.sleep(for: .milliseconds(900))
-            guard !Task.isCancelled else { return }
-            lit = nil
         }
     }
 }

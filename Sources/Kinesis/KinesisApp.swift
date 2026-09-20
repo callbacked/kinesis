@@ -61,20 +61,30 @@ private struct BandMenu: View {
     @ObservedObject var model: BandModel
     @Environment(\.openWindow) private var openWindow
     var body: some View {
-        Text(model.bandName)
-        Text(model.phase)
-        if let battery = model.battery { Text("Battery \(battery)%") }
+        Text("\(model.bandName.lowercased()) · \(model.phase.lowercased())")
+        if let battery = model.battery { Text("battery \(battery)%") }
         Divider()
-        Button(model.controlsEnabled ? "Pause Mac controls" : "Enable Mac controls") { model.toggleControls() }
-            .disabled(model.showingSetup || (!model.live && !model.controlsEnabled))
-        Button(model.wantsConnection ? "Disconnect band" : "Connect band") {
-            if model.wantsConnection { model.disconnect() } else { model.connect() }
-        }.disabled(model.selectedAddress.isEmpty || (model.busy && !model.wantsConnection))
-        Divider()
-        Button("Open Kinesis") {
-            openWindow(id: "main")
-            NSApp.activate(ignoringOtherApps: true)
+        // The same next step the band pane offers, so the menu never disagrees with the window.
+        switch model.nextAction {
+        case .pair:
+            Button("pair band…") { open() }
+        case .pairing, .connecting:
+            Button(model.nextAction.title) {}.disabled(true)
+        case .connect:
+            Button("connect") { model.connect() }
+        case .enableControls, .pauseControls:
+            Button(model.nextAction.title) { model.toggleControls() }.disabled(model.showingSetup)
         }
-        Button("Quit Kinesis") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        if model.live || model.wantsConnection {
+            Button("disconnect") { model.disconnect() }
+        }
+        Divider()
+        Button("open kinesis") { open() }
+        Button("quit kinesis") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+
+    private func open() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
