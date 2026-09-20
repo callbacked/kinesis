@@ -95,7 +95,7 @@ struct FactoryResetReminder: View {
             Text("two quick things").font(.system(size: 26)).tracking(-0.9)
             VStack(alignment: .leading, spacing: 16) {
                 step(1, "factory reset the band",
-                     "\(OwnershipCeremony.factoryResetHint). it clears the old owner, so setup goes smoothly next time.",
+                     "\(OwnershipCeremony.factoryResetHint). it gives the band a fresh start, so setup goes smoothly next time.",
                      GuideLink(title: "how to factory reset", url: PairingPresentation.factoryResetGuide))
                 step(2, "forget it in bluetooth settings",
                      "an old entry there can cause pairing issues later.",
