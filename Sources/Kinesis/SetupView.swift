@@ -15,6 +15,7 @@ struct SetupView: View {
     @State private var hasReceivedGesture = false
     @State private var feedbackVisible = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
     @State private var practiceValue = 50.0
     @State private var practiceRouter = DialRouter()
     @State private var hasTurned = false
@@ -195,22 +196,24 @@ struct SetupView: View {
             }.animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: model.live || model.pairInProgress)
         case 1:
             ZStack(alignment: .bottom) {
+                // The same stage as the overview: a pool of light, the hand, and the band's electrodes.
+                Circle().fill(RadialGradient(colors: [KinesisStyle.pool, .clear], center: .center, startRadius: 24, endRadius: 160))
+                    .opacity(scheme == .dark ? 1 : 0)
+                Circle().fill(RadialGradient(colors: [KinesisStyle.accent.opacity(0.16), .clear], center: .center, startRadius: 10, endRadius: 150))
+                    .opacity(feedbackVisible ? 1 : 0)
                 // Until the band sends something, the hand acts out the swipe you picked.
                 HandView(scene: HandSceneView(hand: model.bandHand, highlight: model.pinchedFinger.map { $0 == "middle" ? .middle : .index } ?? handHighlight,
                                               gesture: received.isEmpty ? .swipe(preview) : model.recognizedGesture,
                                               revision: revision, sustained: model.pinchedFinger != nil, viewpoint: .teaching))
-                RoundedRectangle(cornerRadius: 24)
-                    .stroke(KinesisStyle.accent.opacity(feedbackVisible ? 0.3 : 0), lineWidth: 16)
-                    .blur(radius: 18).allowsHitTesting(false)
+                ElectrodeRing(angle: 0, engaged: 0).allowsHitTesting(false)
                 HStack(spacing: 8) {
                     Image(systemName: received.isEmpty ? preview.symbol : "checkmark.circle.fill")
                         .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                     Text(received.isEmpty ? "swipe \(preview.rawValue)" : received).contentTransition(.opacity)
                 }.font(KinesisType.label)
                     .foregroundStyle(received.isEmpty ? KinesisStyle.secondary : KinesisStyle.accent)
-                    .padding(.bottom, 22)
-            }.frame(width: 540).clipShape(RoundedRectangle(cornerRadius: 24))
-                .shadow(color: KinesisStyle.accent.opacity(feedbackVisible ? 0.24 : 0), radius: 24)
+                    .padding(.bottom, 34)
+            }.frame(width: 292, height: 292)
         case 2:
             PracticeDial(value: practiceValue, engaged: model.dialEngaged && model.live)
         default:
@@ -308,22 +311,18 @@ struct SetupView: View {
 private struct PracticeDial: View {
     let value: Double
     let engaged: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
-            Circle().fill(KinesisStyle.surface)
-                .shadow(color: KinesisStyle.accent.opacity(engaged ? 0.18 : 0), radius: 28)
-            ForEach(0..<41) { tick in
-                Capsule().fill(Double(tick) <= value / 2.5 ? KinesisStyle.accent : KinesisStyle.line)
-                    .frame(width: 2, height: tick.isMultiple(of: 5) ? 12 : 7)
-                    .offset(y: -105)
-                    .rotationEffect(.degrees(-135 + Double(tick) * 6.75))
-            }
-            Circle().fill(KinesisStyle.accent).frame(width: 7, height: 7)
-                .offset(y: -82).rotationEffect(.degrees(-135 + value * 2.7))
+            Circle().fill(RadialGradient(colors: [KinesisStyle.accent.opacity(engaged ? 0.15 : 0), .clear],
+                                         center: .center, startRadius: 10, endRadius: 140))
+            // The overview's ring, used as a dial: it fills from the lower left as you turn.
+            ElectrodeRing(angle: -135 + value * 2.7, engaged: 1, sweep: 135)
             Text(value.formatted(.number.precision(.fractionLength(0))))
                 .font(.system(size: 54, weight: .light)).monospacedDigit()
-        }.frame(width: 250, height: 250)
+        }.frame(width: 270, height: 270)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: engaged)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Practice dial")
             .accessibilityValue("\(Int(value)) percent")

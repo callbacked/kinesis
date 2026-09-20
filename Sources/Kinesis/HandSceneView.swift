@@ -153,7 +153,7 @@ struct HandSceneView: NSViewRepresentable {
                 let bounds = rig.visibleBounds(of: mesh, through: facing)
                 let middle = (bounds.low + bounds.high) / 2
                 let reach = max(bounds.high.x - bounds.low.x, bounds.high.y - bounds.low.y)
-                camera.camera?.orthographicScale = Double(reach / 2 / (viewpoint == .teaching ? 0.66 : 0.72))
+                camera.camera?.orthographicScale = Double(reach / 2 / (viewpoint == .teaching ? 0.7 : 0.72))
                 var place = matrix_identity_float4x4
                 place.columns.3 = SIMD4(-middle.x, -middle.y, 0, 1)
                 let view = place * facing

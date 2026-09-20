@@ -336,6 +336,45 @@ struct OpenRow<Control: View>: View {
     }
 }
 
+/// Sixteen points in a circle, one for each electrode on the band. At rest they are barely
+/// there. While you hold a pinch and turn, the ones your wrist points at light up.
+struct ElectrodeRing: View, Animatable {
+    /// Degrees of turn, zero at the top.
+    var angle: Double
+    /// 0 to 1: how far the dial is engaged.
+    var engaged: Double
+    /// A dial's reach in degrees to either side of the top. The points from its start up to
+    /// `angle` stay lit, and the points past its ends are left out. A plain ring has none.
+    var sweep: Double?
+
+    nonisolated var animatableData: AnimatablePair<Double, Double> {
+        get { AnimatablePair(angle, engaged) }
+        set { (angle, engaged) = (newValue.first, newValue.second) }
+    }
+
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let radius = min(size.width, size.height) / 2 - 10
+            for electrode in 0..<16 {
+                var degrees = Double(electrode) * 22.5
+                if degrees > 180 { degrees -= 360 }
+                if let sweep, abs(degrees) > sweep + 1 { continue }
+                var apart = abs((degrees - angle).truncatingRemainder(dividingBy: 360))
+                if apart > 180 { apart = 360 - apart }
+                var lit = engaged * max(0, 1 - apart / 36)
+                if sweep != nil, degrees <= angle { lit = max(lit, 0.4) }
+                let turn = (degrees - 90) * .pi / 180, width = 3 + 3 * lit
+                let dot = Path(ellipseIn: CGRect(x: center.x + radius * cos(turn) - width / 2, y: center.y + radius * sin(turn) - width / 2,
+                                                 width: width, height: width))
+                context.fill(dot, with: .color(KinesisStyle.ink.opacity(0.24)))
+                if lit > 0.01 { context.fill(dot, with: .color(KinesisStyle.accent.opacity(lit))) }
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 extension KinesisCore.TapGesture {
     /// One ring for a tap, two for a double tap, a filled one for a hold.
     var symbol: String {

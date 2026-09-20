@@ -122,39 +122,6 @@ private struct GestureCaption: View {
     }
 }
 
-/// Sixteen points around the hand, one for each electrode on the band. At rest they are
-/// barely there. While you hold a pinch and turn, the ones your wrist points at light up.
-private struct ElectrodeRing: View, Animatable {
-    /// Degrees of turn, zero at the top.
-    var angle: Double
-    /// 0 to 1: how far the dial is engaged.
-    var engaged: Double
-
-    nonisolated var animatableData: AnimatablePair<Double, Double> {
-        get { AnimatablePair(angle, engaged) }
-        set { (angle, engaged) = (newValue.first, newValue.second) }
-    }
-
-    var body: some View {
-        Canvas { context, size in
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let radius = min(size.width, size.height) / 2 - 10
-            for electrode in 0..<16 {
-                let degrees = Double(electrode) * 22.5
-                var apart = abs((degrees - angle).truncatingRemainder(dividingBy: 360))
-                if apart > 180 { apart = 360 - apart }
-                let lit = engaged * max(0, 1 - apart / 36)
-                let turn = (degrees - 90) * .pi / 180, width = 3 + 3 * lit
-                let dot = Path(ellipseIn: CGRect(x: center.x + radius * cos(turn) - width / 2, y: center.y + radius * sin(turn) - width / 2,
-                                                 width: width, height: width))
-                context.fill(dot, with: .color(KinesisStyle.ink.opacity(0.24)))
-                if lit > 0.01 { context.fill(dot, with: .color(KinesisStyle.accent.opacity(lit))) }
-            }
-        }
-        .accessibilityHidden(true)
-    }
-}
-
 /// Your mappings at a glance. A row flashes the moment you perform its gesture,
 /// so the page answers "did the Mac get that?" without a word.
 private struct GestureMap: View {
