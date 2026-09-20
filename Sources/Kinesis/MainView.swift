@@ -57,7 +57,9 @@ struct MainView: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 26) {
+        VStack(alignment: .leading, spacing: 22) {
+            // First, where it is seen without scrolling, even in the smallest window.
+            if let error = model.error { ErrorNote(text: error).transition(.opacity) }
             Group {
                 switch page {
                 case .overview: OverviewPage(model: model)
@@ -65,8 +67,8 @@ struct MainView: View {
                 case .band: BandPage(model: model)
                 }
             }.id(page).transition(reduceMotion ? AnyTransition.opacity : AnyTransition(.blurReplace))
-            if let error = model.error { ErrorNote(text: error) }
         }
+        .animation(reduceMotion ? nil : KinesisMotion.settle, value: model.error)
         .frame(maxWidth: 760, alignment: .leading)
         .padding(.horizontal, 38).padding(.top, 22).padding(.bottom, 30)
         .frame(maxWidth: .infinity, alignment: .leading)

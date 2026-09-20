@@ -64,7 +64,7 @@ struct BandPane: View {
             band
             VStack(spacing: 9) {
                 Text(model.bandName.lowercased()).font(.system(size: 19)).tracking(-0.4)
-                    .foregroundStyle(KinesisStyle.ink).lineLimit(1).truncationMode(.middle)
+                    .foregroundStyle(KinesisStyle.ink).lineLimit(1).truncationMode(.middle).minimumScaleFactor(0.82)
                 state
             }.padding(.top, 18)
             notice.padding(.top, 16)
@@ -117,6 +117,8 @@ struct BandPane: View {
     private var stateText: String {
         if model.justPaired { return "paired. you’re all set." }
         if unpaired { return model.selectedAddress.isEmpty ? "no band yet" : "setup incomplete" }
+        // The notice under this line already says what to do. The state only says who we wait for.
+        if model.awaitingSystemPairing { return "waiting for macOS" }
         return model.phase.lowercased()
     }
 
