@@ -36,8 +36,9 @@ struct OverviewPage: View {
                 Spacer(minLength: 0)
                 ZStack {
                     DialRing(angle: dialAngle, engaged: model.dialEngaged && model.live)
-                    HandSceneView(hand: model.bandHand, highlight: handHighlight, revision: model.gestureCount,
-                                  sustained: model.pinchedFinger != nil || model.dialEngaged)
+                    HandSceneView(hand: model.bandHand, highlight: handHighlight, gesture: model.recognizedGesture,
+                                  revision: model.gestureCount, sustained: model.pinchedFinger != nil || model.dialEngaged,
+                                  roll: model.dialEngaged ? dialAngle * 0.55 : 0)
                         .frame(width: 330, height: 330)
                 }.frame(width: 350, height: 350)
             }

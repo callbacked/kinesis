@@ -62,7 +62,7 @@ swiftui window and menu bar, corebluetooth for the band connection, and swift de
 
 the app shows which command it sent. that isn't confirmation that another app acted on it. the dial is relative wrist motion, with adjustable sensitivity, rather than a tracked hand pose.
 
-the hand stays still, palm facing you. the thumb and the relevant fingertip light up on a gesture, and stay lit during a pinch. it isn't live finger tracking. the mesh comes from [webxr input profiles](https://github.com/immersive-web/webxr-input-profiles), with its mit notice bundled. `scripts/export-hand.mjs` exports the neutral mesh and fingertip locations. [hand reference notes](hand-references.md) cover the research.
+the hand acts out what the band reports, seen from the thumb side the way meta shows these gestures. it pinches for as long as you hold a pinch, turns around the pinch while you turn the dial, and replays a swipe along the index finger. the thumb and the fingertip it meets light up. with reduce motion on, the hand stays still and only lights up. it isn't live finger tracking: the poses are fixed and the band's events choose between them. the mesh comes from [webxr input profiles](https://github.com/immersive-web/webxr-input-profiles), with its mit notice bundled. `scripts/export-hand.py` exports the mesh with its skeleton: the joints, a parent for each, and four bone weights per vertex. [hand reference notes](hand-references.md) cover the research.
 
 the band uses a background-removed [meta product image published by gizmodo](https://gizmodo.com/metas-smart-glasses-now-have-a-screen-and-a-magic-wristband-2000659760); it isn't a 3d model.
 

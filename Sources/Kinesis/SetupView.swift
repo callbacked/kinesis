@@ -195,7 +195,9 @@ struct SetupView: View {
             }.animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: model.live || model.pairInProgress)
         case 1:
             ZStack(alignment: .bottom) {
+                // Until the band sends something, the hand acts out the swipe you picked.
                 HandSceneView(hand: model.bandHand, highlight: model.pinchedFinger.map { $0 == "middle" ? .middle : .index } ?? handHighlight,
+                              gesture: received.isEmpty ? .swipe(preview) : model.recognizedGesture,
                               revision: revision, sustained: model.pinchedFinger != nil, viewpoint: .teaching)
                 RoundedRectangle(cornerRadius: 24)
                     .stroke(KinesisStyle.blue.opacity(feedbackVisible ? 0.3 : 0), lineWidth: 16)
