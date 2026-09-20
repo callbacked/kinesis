@@ -132,6 +132,7 @@ private struct GestureMap: View {
         let symbol: String
         let gesture: String
         let action: String
+        var assigned = true
         var fired: RecognizedGesture?
         var held = false
     }
@@ -146,9 +147,12 @@ private struct GestureMap: View {
         }
         for tap in TapGesture.allCases {
             let action = model.tapMappings[tap] ?? .none
-            guard action != .none else { continue }
-            rows.append(Entry(id: tap.rawValue, symbol: tap.symbol,
-                              gesture: tap.label.lowercased(), action: action.title.lowercased(), fired: .tap(tap)))
+            // A hold is deliberate, so it has a row even before it has an action. Single
+            // taps happen by accident, so they stay out until you give them one.
+            guard action != .none || tap == .middleHold else { continue }
+            rows.append(Entry(id: tap.rawValue, symbol: tap.symbol, gesture: tap.label.lowercased(),
+                              action: action == .none ? "unassigned" : action.title.lowercased(),
+                              assigned: action != .none, fired: .tap(tap)))
         }
         if model.dialTarget != .none {
             rows.append(Entry(id: "dial", symbol: "dial.low", gesture: "pinch + turn",
@@ -176,7 +180,7 @@ private struct GestureMap: View {
                                 Text(entry.gesture).font(KinesisType.body)
                                 Spacer(minLength: 8)
                                 Text(entry.action).font(KinesisType.caption).lineLimit(1)
-                                    .foregroundStyle(KinesisStyle.secondary)
+                                    .foregroundStyle(KinesisStyle.secondary.opacity(entry.assigned ? 1 : 0.6))
                                     .overlay(alignment: .trailing) {
                                         Text(entry.action).font(KinesisType.caption).lineLimit(1)
                                             .foregroundStyle(KinesisStyle.accent).opacity(glow)
