@@ -7,7 +7,7 @@ extension Bundle {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let model = BandModel(forgetSystemPairing: SystemPairing.remove(named:))
+    let model = BandModel()
     func applicationDidFinishLaunching(_ notification: Notification) { model.startAutomatically() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

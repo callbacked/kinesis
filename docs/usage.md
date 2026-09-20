@@ -26,7 +26,7 @@ closing the window keeps the connection in the menu bar. pause controls there wh
 
 the meta sign-in happens once, on meta's own page. the band only trusts an owner that meta has enrolled, so kinesis needs your account to claim it. the session token lives in your keychain. [enrollment notes](enrollment.md) cover the details.
 
-**forget this band** under **band** clears the band, its key, and your meta sign-in from this mac. the band itself stays claimed, so [factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) it too: hold its button for about 16 seconds. forgetting also removes the band from this mac's bluetooth list, because macos refuses to pair with a reset band while its old entry is there. if kinesis can't remove it, it tells you, and you remove it under system settings › bluetooth.
+**forget this band** under **band** clears the band, its key, and your meta sign-in from this mac. the band itself stays claimed, so [factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) it too: hold its button for about 16 seconds. then forget the band under system settings › bluetooth as well. macos keeps its own entry, no app can remove it, and macos won't pair with a reset band while that entry is there. kinesis reminds you of both steps.
 
 turn on **start automatically** under **band** to reconnect and enable controls when kinesis opens. it waits for a live connection and accessibility access. pausing or opening quick setup keeps controls paused for the rest of that run, until you enable them again.
 

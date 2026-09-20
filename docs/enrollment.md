@@ -134,12 +134,13 @@ id, device id, universe, obtained-at time); token material never reaches logs.
   bluetoothd logs "already paired, with a different irk. unpair first", the
   read fails with att error 15, and the band hangs up 30 seconds later when its
   own pairing timer runs out. nothing on the app's side of the link can fix
-  that, so the fix is on the forget side: `forgetEverything` removes the mac's
-  own entry for the band by name (`SystemPairing`, the unpublished
-  `IOBluetoothDevice.remove` that blueutil also uses; tests never get the real
-  one). if that fails, the reset reminder adds a second step with a link to
-  bluetooth settings. att error 15 is reworded into the same advice with the
-  same link; errors 5 and 8 keep the "accept the request" advice.
+  that, and nothing removes the entry either: the unpublished
+  `IOBluetoothDevice.remove` that blueutil uses reports success for the band
+  and leaves the entry in place (tried and dropped). so the person does it. the
+  reminder after forget has two steps, factory reset the band and forget it in
+  bluetooth settings, each with its link. att error 15 is reworded into the
+  same advice with the same link; errors 5 and 8 keep the "accept the request"
+  advice.
 - the sign-in sheet opens on a short preface (why, what is stored, how to undo
   it) and contacts meta only after "continue to meta". while the page is up
   the sheet shows its current host.

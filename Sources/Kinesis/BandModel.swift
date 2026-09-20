@@ -97,7 +97,6 @@ final class BandModel: ObservableObject {
     private let controls: any MacControls
     private let pairClient: @Sendable (MetaSession) -> any BandPairClient
     private let sessionStore: any MetaSessionStoring
-    private let forgetSystemPairing: (String) -> Bool
     private var enrollSession: MetaSession?
     /// Set when a ceremony HTTP step failed with an auth-class error; the
     /// login sheet appears once the connection has wound down.
@@ -189,10 +188,7 @@ final class BandModel: ObservableObject {
          workspaceNotifications: NotificationCenter = NSWorkspace.shared.notificationCenter,
          pairClient: @escaping @Sendable (MetaSession) -> any BandPairClient = { MetaPairClient(session: $0) },
          sessionStore: any MetaSessionStoring = MetaSessionStore(),
-         // Does nothing unless the app passes the real one: a test must never touch this Mac's pairings.
-         forgetSystemPairing: @escaping (String) -> Bool = { _ in false },
          clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
-        self.forgetSystemPairing = forgetSystemPairing
         self.clock = clock
         self.defaults = defaults
         self.started = clock()
@@ -295,15 +291,14 @@ final class BandModel: ObservableObject {
     /// The band page's low-emphasis reset: one confirmed step clears the
     /// remembered band, its stored identity, and the Meta session. The band
     /// stays enrolled server-side; pairing again rebinds it.
-    /// A clean slate: the band, its key, the Meta sign-in, and this Mac's own Bluetooth
-    /// pairing. False if macOS still holds the pairing, and the person has to remove it.
-    @discardableResult func forgetEverything() -> Bool {
+    /// A clean slate on Kinesis's side: the band, its key, and the Meta sign-in. Two things
+    /// stay out of reach, and the reminder names them: the band's own claim, and this Mac's
+    /// Bluetooth entry. No call removes that entry. The unpublished IOBluetooth one reports
+    /// success for the band and leaves the entry where it is.
+    func forgetEverything() {
         cancelEnrollment()
         let address = selectedAddress
-        let name = devices.first { $0.address == address }?.name
         if !address.isEmpty { forgetBand() }
-        // No remembered band means no pairing of ours to remove.
-        let unpaired = name.map(forgetSystemPairing) ?? true
         BandIdentity.delete(for: address)
         sessionStore.deleteSession()
         hasSavedMetaSession = false
@@ -312,8 +307,7 @@ final class BandModel: ObservableObject {
         emptyScans = 0
         celebration?.cancel()
         justPaired = false
-        connectionLog.notice("Forgot the band, its identity, and the Meta session; system pairing removed: \(unpaired, privacy: .public)")
-        return unpaired
+        connectionLog.notice("Forgot the band, its identity, and the Meta session")
     }
 
     /// The privacy escape hatch beside the pairing progress: drops the saved

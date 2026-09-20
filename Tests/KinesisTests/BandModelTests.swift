@@ -1099,17 +1099,14 @@ private struct FakePairClient: BandPairClient {
     let store = SavedSessionStore()
     store.saved = MetaSession(accessToken: "token", userID: "1")
     let connection = RecordedConnection()
-    var unpairedNames: [String] = []
     let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
-                          pairClient: { _ in FakePairClient() }, sessionStore: store,
-                          forgetSystemPairing: { unpairedNames.append($0); return true }, clock: { 100 })
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
     model.connect()
     connection.send(.connected)
     connection.send(.heartbeat)
     try await waitUntil { model.live }
     #expect(model.hasBandIdentity && model.hasSavedMetaSession && !model.showsPairAction)
-    // The Mac's own pairing goes too, by the band's name, and forget says that it went.
-    #expect(model.forgetEverything() && unpairedNames == ["Meta Band"])
+    model.forgetEverything()
     #expect(model.selectedAddress.isEmpty && model.devices.isEmpty && !model.live)
     #expect(!model.hasBandIdentity && !BandIdentity.exists(for: band))
     #expect(!model.hasSavedMetaSession && store.saved == nil)
