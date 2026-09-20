@@ -49,8 +49,6 @@ struct BandPane: View {
     var openBandPage: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
-    /// 0 the moment the band connects, then 1: one ring leaves the band and fades.
-    @State private var greeting = 1.0
 
     private var unpaired: Bool { model.showsPairAction && !model.pairInProgress }
 
@@ -94,10 +92,6 @@ struct BandPane: View {
             Ellipse().fill(.black.opacity(scheme == .dark ? 0.55 : 0.22))
                 .frame(width: 124, height: 10).blur(radius: 11).offset(y: 76)
                 .opacity(unpaired ? 0.4 : 1)
-            // Connecting happens once in a while, so it can afford one moment of its own.
-            Ellipse().stroke(KinesisStyle.accent, lineWidth: 1.5)
-                .frame(width: 176, height: 112)
-                .scaleEffect(0.92 + 0.55 * greeting).opacity(0.55 * (1 - greeting))
             HoldArtwork(hint: model.pairing.holdHint).frame(width: 196, height: 150)
                 .saturation(unpaired ? 0 : 1)
                 .opacity(unpaired ? 0.42 : model.live ? 1 : 0.8)
@@ -105,13 +99,6 @@ struct BandPane: View {
         .frame(height: 170)
         .animation(reduceMotion ? nil : KinesisMotion.calm, value: model.live)
         .animation(reduceMotion ? nil : KinesisMotion.calm, value: unpaired)
-        .onChange(of: model.live) { _, live in
-            guard live, !reduceMotion else { return }
-            var snap = Transaction()
-            snap.disablesAnimations = true
-            withTransaction(snap) { greeting = 0 }
-            withAnimation(.easeOut(duration: 1.2)) { greeting = 1 }
-        }
     }
 
     private var state: some View {
