@@ -59,6 +59,13 @@ final class NativeBandConnection: NSObject, BandConnection,
     private var stage = "idle"
     private var inputReadStartedAt: Double?
     private var systemPairingNoted = false
+    /// macOS can hold a bond that the band no longer has, after a factory reset. The first
+    /// reads then fail at once while macOS asks to pair again, so the read is tried again
+    /// for as long as that request can stay open.
+    private var inputCharacteristic: CBCharacteristic?
+    private var inputReadFirstAt: Double?
+    private var inputReadRetryAt: Double?
+    static let pairingWindow = 45.0
     private var identityRejected: Set<String> = []
     private var lease: Int32 = -1
     private var activity: NSObjectProtocol?
@@ -163,6 +170,19 @@ final class NativeBandConnection: NSObject, BandConnection,
         onEvent?(event)
     }
 
+    private func noteSystemPairing() {
+        deadline = max(deadline, now + 40)
+        guard !systemPairingNoted else { return }
+        systemPairingNoted = true
+        emit(BandEvent(.systemPairingPending))
+    }
+
+    /// True while a refused read may still be macOS pairing again, and not yet a failure.
+    private var withinPairingWindow: Bool {
+        guard !stopping, !disconnecting, session == nil, let first = inputReadFirstAt else { return false }
+        return now - first < Self.pairingWindow
+    }
+
     private func tick() {
         guard onEnd != nil else { return }
         if now >= deadline {
@@ -182,10 +202,21 @@ final class NativeBandConnection: NSObject, BandConnection,
         if !stopping, !systemPairingNoted, let started = inputReadStartedAt, now - started >= 1.5 {
             // This read answers in milliseconds on a bonded link. A slow one means
             // macOS is pairing, which waits on a request the user has to accept.
-            systemPairingNoted = true
-            deadline = max(deadline, now + 40)
             log.notice("Input channel read is waiting; macOS is likely asking to pair")
-            emit(BandEvent(.systemPairingPending))
+            noteSystemPairing()
+        }
+        if !stopping, let retry = inputReadRetryAt, now >= retry {
+            inputReadRetryAt = nil
+            if let peripheral, let inputCharacteristic, peripheral.state == .connected {
+                log.notice("Reading the input channel again while macOS pairs")
+                inputReadStartedAt = now
+                peripheral.readValue(for: inputCharacteristic)
+            } else if let peripheral {
+                // The refused link dropped. The same band is still in reach, so connect to it again.
+                log.notice("Connecting again while macOS pairs")
+                stage = "connecting"
+                central?.connect(peripheral)
+            }
         }
         if !stopping, let batteryCharacteristic, now >= nextBatteryRead {
             nextBatteryRead = now + 60
@@ -274,6 +305,13 @@ final class NativeBandConnection: NSObject, BandConnection,
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         guard central === self.central, peripheral === self.peripheral else { return }
+        if systemPairingNoted, withinPairingWindow {
+            // macOS drops a link whose old bond the band refused. Come back in a moment.
+            log.notice("Link dropped while macOS pairs; will connect again")
+            inputReadStartedAt = nil
+            inputReadRetryAt = now + 2
+            return
+        }
         if !stopping && !disconnecting { recordFailure(error ?? KinesisError(message: "The band disconnected")) }
         finish()
     }
@@ -303,6 +341,8 @@ final class NativeBandConnection: NSObject, BandConnection,
         if service.uuid == serviceID {
             stage = "reading input channel"
             inputReadStartedAt = now
+            inputReadFirstAt = inputReadFirstAt ?? now
+            inputCharacteristic = service.characteristics?.first { $0.uuid == psmID }
         }
         for characteristic in service.characteristics ?? [] {
             if characteristic.uuid == batteryID {
@@ -325,6 +365,13 @@ final class NativeBandConnection: NSObject, BandConnection,
         if let error {
             let native = error as NSError
             log.error("Input channel read failed: \(native.domain, privacy: .public) \(native.code, privacy: .public)")
+            if Self.isPairingError(error), withinPairingWindow {
+                // An old bond fails this read at once, and macOS then asks to pair again.
+                // The request is the user's to accept, so keep the run open and read again.
+                noteSystemPairing()
+                inputReadRetryAt = now + 2
+                return
+            }
             fail(Self.explainingPairing(error)); return
         }
         guard characteristic.uuid == psmID, let bytes = characteristic.value, bytes == Data([255, 0]) else {
@@ -447,11 +494,15 @@ final class NativeBandConnection: NSObject, BandConnection,
 
     /// CoreBluetooth reports a declined, missed, or failed system pairing as an
     /// ATT security error. The raw text tells the user nothing they can act on.
-    static func explainingPairing(_ error: Error) -> Error {
+    static func isPairingError(_ error: Error) -> Bool {
         let native = error as NSError
         let securityCodes = [CBATTError.insufficientAuthentication.rawValue, CBATTError.insufficientEncryption.rawValue,
                              CBATTError.insufficientAuthorization.rawValue]
-        guard native.domain == CBATTErrorDomain, securityCodes.contains(native.code) else { return error }
+        return native.domain == CBATTErrorDomain && securityCodes.contains(native.code)
+    }
+
+    static func explainingPairing(_ error: Error) -> Error {
+        guard isPairingError(error) else { return error }
         return KinesisError(message: "macOS didn't finish pairing with your band. Pair again and accept the Bluetooth request when it appears. If none appears, restart your Mac.")
     }
 
@@ -507,6 +558,9 @@ final class NativeBandConnection: NSObject, BandConnection,
         stage = "idle"
         inputReadStartedAt = nil
         systemPairingNoted = false
+        inputCharacteristic = nil
+        inputReadFirstAt = nil
+        inputReadRetryAt = nil
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
         if lease >= 0 { flock(lease, LOCK_UN); close(lease); lease = -1 }
