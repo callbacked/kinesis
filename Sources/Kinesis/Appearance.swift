@@ -120,14 +120,6 @@ struct KinesisButtonStyle: ButtonStyle {
     }
 }
 
-struct Eyebrow: View {
-    let text: String
-    var body: some View {
-        Text(text).font(.system(size: 11, weight: .medium))
-            .foregroundStyle(KinesisStyle.secondary)
-    }
-}
-
 struct KinesisPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {

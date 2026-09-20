@@ -66,6 +66,7 @@ struct BandPage: View {
 /// Accessibility access as one row: allowed, or what to do about it.
 struct PermissionRow: View {
     @ObservedObject var model: BandModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         OpenRow(title: "Mac controls",
                 detail: model.accessibilityAllowed ? "kinesis can send your assigned shortcuts."
@@ -80,7 +81,7 @@ struct PermissionRow: View {
                     Button("allow access") { model.requestAccessibility() }.buttonStyle(KinesisButtonStyle(prominent: true))
                 }
             }
-        }.animation(KinesisMotion.settle, value: model.accessibilityAllowed)
+        }.animation(reduceMotion ? nil : KinesisMotion.settle, value: model.accessibilityAllowed)
     }
 }
 

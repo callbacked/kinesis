@@ -60,9 +60,7 @@ import KinesisCore
 }
 
 @Test @MainActor func handSelectionUsesTheBandSettingAndPausesControlsUntilTheUserResumes() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set("right", forKey: "bandHand")
     defaults.set(true, forKey: "setupCompleted")
     let connection = RecordedConnection()
@@ -105,9 +103,7 @@ import KinesisCore
 }
 
 @Test @MainActor func pausedSetupReceivesDialMovementThroughTheConnection() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let connection = RecordedConnection()
     let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
     model.selectedAddress = "test-band"
@@ -136,9 +132,7 @@ import KinesisCore
 }
 
 @Test @MainActor func gestureTotalSurvivesRelaunchWithoutCountingDuplicateOrStaleInput() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(73, forKey: "totalGestureCount")
     let connection = RecordedConnection()
     let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
@@ -162,9 +156,7 @@ import KinesisCore
 }
 
 @Test @MainActor func automaticStartRequiresOptInAndACompletedSetup() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let band = ["address": "test-band", "name": "Test Band"]
     defaults.set(try JSONSerialization.data(withJSONObject: band), forKey: "band")
     defaults.set(true, forKey: "setupCompleted")
@@ -199,9 +191,7 @@ import KinesisCore
 }
 
 @Test @MainActor func reconnectClearsTheHeldDialAndAcceptsOnlyFreshGestures() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let connection = RecordedConnection()
     let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
     model.selectedAddress = "test-band"
@@ -248,9 +238,7 @@ import KinesisCore
 
 @Test(arguments: [BandHand.right, .left], [DialTarget.volume, .brightness])
 @MainActor func eachHandUsesTheSameDialDirectionForPracticeAndMacControls(hand: BandHand, target: DialTarget) async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let connection = RecordedConnection()
     let controls = RecordingControls()
     var now = 100.0
@@ -290,9 +278,7 @@ import KinesisCore
 }
 
 @Test @MainActor func controlDispatchRequiresFreshInputAndStopsOnPauseOrPermissionLoss() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(true, forKey: "setupCompleted")
     let connection = RecordedConnection()
     let controls = RecordingControls()
@@ -339,9 +325,7 @@ import KinesisCore
 }
 
 @Test @MainActor func dialNeedsANewPinchAfterEnablingOrChangingSettings() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(true, forKey: "setupCompleted")
     let connection = RecordedConnection()
     let controls = RecordingControls()
@@ -384,9 +368,7 @@ import KinesisCore
 }
 
 @Test @MainActor func automaticControlsWaitForAccessAndManualPausePersistsAcrossReconnect() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(true, forKey: "setupCompleted")
     defaults.set(true, forKey: "startsAutomatically")
     defaults.set(try JSONEncoder().encode(BandDevice(address: "test-band", name: "Test Band")), forKey: "band")
@@ -430,9 +412,7 @@ import KinesisCore
 }
 
 @Test @MainActor func sleepAndWakeReconnectWithoutRestoringAHeldDial() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(true, forKey: "setupCompleted")
     let connection = RecordedConnection()
     let controls = RecordingControls()
@@ -469,9 +449,7 @@ import KinesisCore
 }
 
 @Test @MainActor func aScanInterruptedBySleepReturnsToDisconnectedAfterWake() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let notifications = NotificationCenter()
     let connection = RecordedConnection()
     let model = BandModel(defaults: defaults, connection: connection, workspaceNotifications: notifications, sessionStore: SavedSessionStore(), clock: { 100 })
@@ -487,9 +465,7 @@ import KinesisCore
 }
 
 @Test @MainActor func theWatchdogReconnectsOnlyWhenAuthenticatedInputStops() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let connection = RecordedConnection()
     var now = 100.0
     let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { now })
@@ -509,9 +485,7 @@ import KinesisCore
 
 @Test(arguments: [false, true]) @MainActor
 func recoveryScanWaitsForShutdownAndPausesControls(streaming: Bool) async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band")
     let discovered = BandDevice(address: UUID().uuidString, name: remembered.name, rssi: -40)
     defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
@@ -554,9 +528,7 @@ func recoveryScanWaitsForShutdownAndPausesControls(streaming: Bool) async throws
 
 @Test(arguments: ["scan", "forget"]) @MainActor
 func recoveryCancelsPendingReconnect(action: String) async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band")
     defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
     let connection = RecordedConnection()
@@ -583,9 +555,7 @@ func recoveryCancelsPendingReconnect(action: String) async throws {
 }
 
 @Test @MainActor func forgettingABandPreservesOtherPreferencesAndAllowsDiscoveryAfterRelaunch() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band", rssi: -35)
     defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
     defaults.set(true, forKey: "startsAutomatically")
@@ -596,7 +566,7 @@ func recoveryCancelsPendingReconnect(action: String) async throws {
     let connection = RecordedConnection()
     connection.finishesOnStop = false
     let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(), sessionStore: SavedSessionStore(), clock: { 100 })
-    var expectedPreferences = try #require(defaults.persistentDomain(forName: suite))
+    var expectedPreferences = defaults.contents
     expectedPreferences.removeValue(forKey: "band")
     model.connect()
     connection.send(.connected)
@@ -608,7 +578,7 @@ func recoveryCancelsPendingReconnect(action: String) async throws {
     #expect(model.selectedAddress.isEmpty && model.devices.isEmpty && model.discoveredAddresses.isEmpty)
     #expect(model.battery == nil && model.error == nil)
     #expect(model.busy && !model.canScan && !model.wantsConnection && !model.controlsEnabled)
-    let actualPreferences = try #require(defaults.persistentDomain(forName: suite))
+    let actualPreferences = defaults.contents
     #expect(NSDictionary(dictionary: actualPreferences).isEqual(to: expectedPreferences))
     connection.finish()
     #expect(!model.busy && model.canScan)
@@ -633,9 +603,7 @@ func recoveryCancelsPendingReconnect(action: String) async throws {
 }
 
 @Test @MainActor func scanResultsDistinguishSameNamedDevicesWithoutReplacingTheRememberedSelection() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band", rssi: -35)
     let first = BandDevice(address: UUID().uuidString, name: remembered.name, rssi: -40)
     let second = BandDevice(address: UUID().uuidString, name: remembered.name, rssi: -50)
@@ -672,9 +640,7 @@ func recoveryCancelsPendingReconnect(action: String) async throws {
 
 @Test(arguments: ["disconnect", "forget", "sleep", "shutdown"]) @MainActor
 func recoveryScanIsCancelledBeforeShutdownCompletes(action: String) async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band")
     defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
     let connection = RecordedConnection()
@@ -732,9 +698,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func pairBandRunsLoginCeremonyReconnectAndDoneForAnUnclaimedBand() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let remembered = BandDevice(address: "test-band", name: "Meta Band")
     defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
     let connection = RecordedConnection()
@@ -776,9 +740,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func aSavedSessionClaimsAnUnclaimedBandStraightAway() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let remembered = BandDevice(address: "test-band", name: "Meta Band")
     defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
     let connection = RecordedConnection()
@@ -803,9 +765,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func pairBandRetriesAMismatchOnceThenEnrollsWithTheSavedSession() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let band = "test-\(UUID().uuidString)"
     defer { BandIdentity.delete(for: band) }
     defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
@@ -840,9 +800,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func aPairFailureShowsOneLowercaseLineAndTheButtonRetries() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let band = "test-\(UUID().uuidString)"
     defer { BandIdentity.delete(for: band) }
     defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
@@ -869,9 +827,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func anOwnershipRejectionSurfacesTheDedicatedLineUnderThePairButton() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let band = "test-\(UUID().uuidString)"
     defer { BandIdentity.delete(for: band) }
     defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
@@ -891,9 +847,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func pairBandScansSelectsAndClaimsWhenNothingIsRemembered() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let connection = RecordedConnection()
     let store = SavedSessionStore()
     store.saved = MetaSession(accessToken: "saved", userID: "7")
@@ -919,9 +873,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func repeatedEmptyScansSurfaceTheHoldButtonHint() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let connection = RecordedConnection()
     let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
                           pairClient: { _ in FakePairClient() }, sessionStore: SavedSessionStore(), clock: { 100 })
@@ -941,9 +893,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func aPairRunReportsItsStagesTheSystemPairingRequestAndTheClaimBeat() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(try JSONEncoder().encode(BandDevice(address: "test-band", name: "Meta Band")), forKey: "band")
     defer { BandIdentity.delete(for: "test-band") }
     let connection = RecordedConnection()
@@ -972,9 +922,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func aFailedPairRunRemembersWhereItStopped() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let connection = RecordedConnection()
     let store = SavedSessionStore()
     store.saved = MetaSession(accessToken: "token", userID: "1")
@@ -1006,9 +954,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func cancelPairingEndsARunAtAnyStage() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let connection = RecordedConnection()
     let store = SavedSessionStore()
     store.saved = MetaSession(accessToken: "token", userID: "1")
@@ -1025,9 +971,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func bailingOutOfTheSignInLeavesAnIncompleteSetupNotALostBand() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let connection = RecordedConnection()
     let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
                           pairClient: { _ in FakePairClient() }, sessionStore: SavedSessionStore(), clock: { 100 })
@@ -1046,9 +990,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func lettingGoOfATurnIsNotATap() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(true, forKey: "setupCompleted")
     let connection = RecordedConnection()
     let controls = RecordingControls()
@@ -1090,9 +1032,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func theBandPaneAlwaysOffersTheNextUsefulStep() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(true, forKey: "setupCompleted")
     let band = "test-\(UUID().uuidString)"
     defer { BandIdentity.delete(for: band) }
@@ -1128,9 +1068,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func aPairedBandDisconnectedByHandCanConnectAgain() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let band = "test-\(UUID().uuidString)"
     defer { BandIdentity.delete(for: band) }
     defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
@@ -1153,9 +1091,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func forgetEverythingClearsTheBandIdentitySessionAndRememberedBand() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let band = "test-\(UUID().uuidString)"
     defer { BandIdentity.delete(for: band) }
     defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
@@ -1186,9 +1122,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func switchingAccountsForcesTheSignInSheetOnTheNextPair() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(try JSONEncoder().encode(BandDevice(address: "test-band", name: "Meta Band")), forKey: "band")
     let connection = RecordedConnection()
     let store = SavedSessionStore()
@@ -1205,9 +1139,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func switchingAccountsMidCeremonyRestartsAtTheSignInSheet() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(try JSONEncoder().encode(BandDevice(address: "test-band", name: "Meta Band")), forKey: "band")
     let connection = RecordedConnection()
     let store = SavedSessionStore()
@@ -1238,9 +1170,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func anExpiredSessionMidCeremonyAsksForOneSignIn() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     defaults.set(try JSONEncoder().encode(BandDevice(address: "test-band", name: "Meta Band")), forKey: "band")
     let connection = RecordedConnection()
     let client = FakePairClient(failure: MetaSessionInvalidError(message: "your meta session expired. sign in to claim the band again."))
@@ -1266,9 +1196,7 @@ private struct FakePairClient: BandPairClient {
 }
 
 @Test @MainActor func theBandPageFollowsTheTwoActionStateMatrix() async throws {
-    let suite = "kinesis-tests-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = MemoryDefaults()
     let store = SavedSessionStore()
     // First run: nothing remembered. The one button is the whole surface.
     let fresh = BandModel(defaults: defaults, connection: RecordedConnection(), controls: RecordingControls(),

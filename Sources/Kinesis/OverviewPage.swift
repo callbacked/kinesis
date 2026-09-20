@@ -25,7 +25,7 @@ struct OverviewPage: View {
             // The mirror follows the wrist itself, not the steps sent to the Mac. Those are
             // rate limited, and a quick turn would hardly move the light at all.
             guard delta.isFinite else { return }
-            withAnimation(.easeOut(duration: 0.08)) { wristTurn = max(-60, min(60, wristTurn + delta)) }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.08)) { wristTurn = max(-60, min(60, wristTurn + delta)) }
         }
         .onChange(of: model.dialEngaged) { _, engaged in
             if engaged { wristTurn = 0 }

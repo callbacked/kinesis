@@ -310,6 +310,8 @@ final class BandModel: ObservableObject {
         pairFailure = nil
         pairFailedStep = nil
         emptyScans = 0
+        celebration?.cancel()
+        justPaired = false
         connectionLog.notice("Forgot the band, its identity, and the Meta session; system pairing removed: \(unpaired, privacy: .public)")
         return unpaired
     }

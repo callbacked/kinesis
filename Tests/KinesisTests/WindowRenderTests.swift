@@ -48,8 +48,7 @@ private struct AllowedControls: MacControls {
     defer { BandIdentity.delete(for: band) }
 
     func model(paired: Bool, live: Bool, trusted: Bool = true, turning: Bool = false) throws -> BandModel {
-        let suite = "kinesis-render-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = MemoryDefaults()
         defaults.set(true, forKey: "setupCompleted")
         defaults.set(1284, forKey: "totalGestureCount")
         if paired {
@@ -75,8 +74,7 @@ private struct AllowedControls: MacControls {
     // The hard cases: a long name, a low battery, a big count, a long error, and the
     // wait for macOS, all at the smallest size the window allows.
     func strained() throws -> BandModel {
-        let suite = "kinesis-render-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = MemoryDefaults()
         defaults.set(true, forKey: "setupCompleted")
         defaults.set(1_284_302, forKey: "totalGestureCount")
         defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Alexander’s Meta Neural Band 00BC-7F3A")), forKey: "band")
@@ -92,8 +90,7 @@ private struct AllowedControls: MacControls {
         return model
     }
     func waitingForMacOS() throws -> BandModel {
-        let suite = "kinesis-render-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = MemoryDefaults()
         defaults.set(true, forKey: "setupCompleted")
         let unclaimed = "render-unclaimed-\(UUID().uuidString)"
         defaults.set(try JSONEncoder().encode(BandDevice(address: unclaimed, name: "Meta Band 00BC")), forKey: "band")

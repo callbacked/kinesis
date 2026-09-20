@@ -128,6 +128,7 @@ private let testIdentity = BandIdentityInfo(
 @Test @MainActor func theSessionStoreRoundTripsThroughTheKeychain() throws {
     let store = MetaSessionStore(service: "local.callbacked.kinesis.tests",
                                  account: "session-\(UUID().uuidString)")
+    defer { store.deleteSession() }
     #expect(!store.hasSavedSession() && store.restoreSession() == nil)
     let session = MetaSession(accessToken: "token", userID: "42", deviceID: "device",
                               obtainedAt: Date(timeIntervalSince1970: 100))

@@ -4,7 +4,6 @@ import KinesisCore
 /// One type scale for the whole app. Large and light for what matters, small
 /// and grey for what supports it.
 enum KinesisType {
-    static let display = Font.system(size: 49, weight: .regular)
     static let title = Font.system(size: 32, weight: .regular)
     static let headline = Font.system(size: 21, weight: .regular)
     static let lead = Font.system(size: 15, weight: .regular)
@@ -157,6 +156,7 @@ struct PillMenu<Value: Hashable>: View {
     let select: (Value) -> Void
     var label = ""
     @State private var hovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Menu {
@@ -181,7 +181,9 @@ struct PillMenu<Value: Hashable>: View {
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         .onHover { hovered = $0 }
-        .animation(KinesisMotion.settle, value: hovered)
+        // A menu's own tracking can swallow the pointer's exit, so a pick clears the hover too.
+        .onChange(of: selection) { _, _ in hovered = false }
+        .animation(reduceMotion ? nil : KinesisMotion.settle, value: hovered)
         .accessibilityLabel(label)
     }
 }
@@ -216,6 +218,7 @@ struct PillSlider: View {
     var label = ""
     @State private var dragging = false
     @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var fraction: Double { (value - range.lowerBound) / (range.upperBound - range.lowerBound) }
 
@@ -228,7 +231,7 @@ struct PillSlider: View {
                 Capsule().fill(KinesisStyle.accent).frame(width: knob / 2 + travel * fraction, height: 8)
                 Circle().fill(.white).frame(width: knob, height: knob)
                     .shadow(color: .black.opacity(0.25), radius: dragging ? 5 : 2, y: 1)
-                    .scaleEffect(dragging ? 1.12 : 1)
+                    .scaleEffect(dragging && !reduceMotion ? 1.12 : 1)
                     .offset(x: travel * fraction)
             }
             .frame(height: knob)
@@ -237,7 +240,7 @@ struct PillSlider: View {
                 dragging = true
                 set(range.lowerBound + (drag.location.x - knob / 2) / travel * (range.upperBound - range.lowerBound))
             }.onEnded { _ in dragging = false })
-            .animation(KinesisMotion.settle, value: dragging)
+            .animation(reduceMotion ? nil : KinesisMotion.settle, value: dragging)
         }
         .frame(height: 20)
         .focusable().focused($focused)
@@ -290,7 +293,7 @@ struct TextTabs<Value: Hashable>: View {
                     .onHover { inside in hovered = inside ? option.value : (hovered == option.value ? nil : hovered) }
                     .accessibilityAddTraits(chosen ? .isSelected : [])
             }
-        }.animation(KinesisMotion.settle, value: hovered)
+        }.animation(reduceMotion ? nil : KinesisMotion.settle, value: hovered)
             .accessibilityElement(children: .contain).accessibilityLabel("Pages")
     }
 }
@@ -309,21 +312,6 @@ struct Readout: View {
                     .contentTransition(.numericText())
             }.foregroundStyle(KinesisStyle.ink.opacity(0.92))
             Text(label).font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.85))
-        }.accessibilityElement(children: .combine)
-    }
-}
-
-/// A label over its value on a page: what it is in ink, how it is in grey.
-struct Pairing: View {
-    let label: String
-    let value: String
-    var live = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
-            Text(value).font(KinesisType.headline).tracking(-0.4).monospacedDigit()
-                .foregroundStyle(live ? KinesisStyle.accent : KinesisStyle.ink)
-                .contentTransition(.numericText()).lineLimit(1)
         }.accessibilityElement(children: .combine)
     }
 }
