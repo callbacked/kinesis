@@ -29,15 +29,14 @@ struct MetaLoginView: View {
             Text("your band is tied to your meta account, so kinesis needs it once to claim the band for this Mac.")
                 .font(.system(size: 14)).foregroundStyle(KinesisStyle.secondary).lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 26) {
                 promise("lock.shield", "you sign in on meta’s page",
                         "kinesis opens auth.meta.com. it gets a session token back, not your password.")
                 promise("key", "token lives in your keychain",
                         "kinesis uses it to claim your band. forget this band removes it.")
                 promise("arrow.uturn.backward", "your band stays on your account",
                         "a factory reset undoes all of this: \(OwnershipCeremony.factoryResetHint).")
-            }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
-                .background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 16)).padding(.top, 30)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 34)
             Spacer(minLength: 0)
             HStack(spacing: 14) {
                 Spacer()

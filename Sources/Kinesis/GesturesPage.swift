@@ -19,7 +19,7 @@ struct GesturesPage: View {
                     .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
             }
             GestureLight(model: model) { lit in
-            VStack(spacing: 0) {
+            VStack(spacing: 2) {
                 if family == "swipe" {
                     ForEach(SwipeDirection.allCases) { direction in
                         assignment(direction.label, symbol: direction.symbol, last: direction == SwipeDirection.allCases.last,
@@ -37,7 +37,6 @@ struct GesturesPage: View {
                         PillMenu(options: DialTarget.allCases.map { Choice($0, $0.title.lowercased()) },
                                  selection: model.dialTarget, select: { model.dialTarget = $0 }, label: "Dial controls")
                     }
-                    Rectangle().fill(KinesisStyle.line).frame(height: 1).padding(.horizontal, 20)
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             Text("sensitivity").font(KinesisType.body)
@@ -52,11 +51,9 @@ struct GesturesPage: View {
                             Spacer()
                             Text("less movement")
                         }.font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
-                    }.padding(20)
+                    }.padding(.top, 18)
                 }
             }
-            .background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 18))
-            .clipShape(RoundedRectangle(cornerRadius: 18))
             }
             .id(family).transition(reduceMotion ? AnyTransition.opacity : AnyTransition(.blurReplace))
             Text(model.live ? "perform a gesture and its row lights up." : "connect your band to try them as you edit.")
@@ -69,22 +66,13 @@ struct GesturesPage: View {
 
     private func assignment(_ label: String, symbol: String, last: Bool, lit: Bool, selection: MacAction,
                             select: @escaping (MacAction) -> Void) -> some View {
-        VStack(spacing: 0) {
-            row(symbol: symbol, title: label.lowercased(), lit: lit) {
-                PillMenu(options: actions, selection: selection, select: select, label: label)
-            }
-            if !last { Rectangle().fill(KinesisStyle.line).frame(height: 1).padding(.horizontal, 20) }
+        row(symbol: symbol, title: label.lowercased(), lit: lit) {
+            PillMenu(options: actions, selection: selection, select: select, label: label)
         }
     }
 
     private func row<Control: View>(symbol: String, title: String, lit: Bool = false,
                                     @ViewBuilder control: () -> Control) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol).frame(width: 21).foregroundStyle(lit ? KinesisStyle.blue : KinesisStyle.secondary)
-            Text(title).font(KinesisType.body).foregroundStyle(lit ? KinesisStyle.blue : KinesisStyle.ink)
-            Spacer()
-            control()
-        }.padding(.horizontal, 20).padding(.vertical, 14)
-            .background(KinesisStyle.blue.opacity(lit ? 0.1 : 0))
+        OpenRow(symbol: symbol, title: title, lit: lit) { control() }
     }
 }

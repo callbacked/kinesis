@@ -212,15 +212,15 @@ struct SetupView: View {
         case 2:
             PracticeDial(value: practiceValue, engaged: model.dialEngaged && model.live)
         default:
-            VStack(alignment: .leading, spacing: 17) {
-                Text("your shortcuts").font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
+            VStack(alignment: .leading, spacing: 0) {
+                SectionLabel(text: "your shortcuts").padding(.bottom, 8)
                 readyRow("arrow.left.arrow.right", "swipe left or right", "switch desktops")
                 readyRow("arrow.up", "swipe up", (model.mappings[.up] ?? .none).title.lowercased())
                 readyRow("playpause", "index double tap", (model.tapMappings[.indexDoubleTap] ?? .none).title.lowercased())
-                readyRow("dial.low", "pinch + turn", model.dialTarget.title.lowercased())
+                readyRow("dial.low", "pinch + turn", model.dialTarget.title.lowercased(), last: true)
                 Text("change any of them later under gestures.")
-                    .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
-            }.padding(26).frame(width: 440).background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 22))
+                    .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary).padding(.top, 14)
+            }.frame(width: 460)
         }
     }
 
@@ -284,12 +284,15 @@ struct SetupView: View {
         }
     }
 
-    private func readyRow(_ symbol: String, _ title: String, _ detail: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol).frame(width: 23).foregroundStyle(KinesisStyle.secondary)
-            Text(title).font(KinesisType.body)
-            Spacer()
-            Text(detail).font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
+    private func readyRow(_ symbol: String, _ title: String, _ detail: String, last: Bool = false) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                Image(systemName: symbol).font(.system(size: 14)).frame(width: 22).foregroundStyle(KinesisStyle.secondary)
+                Text(title).font(.system(size: 15))
+                Spacer()
+                Text(detail).font(KinesisType.body).foregroundStyle(KinesisStyle.secondary)
+            }.padding(.vertical, 14)
+            if !last { Rectangle().fill(KinesisStyle.line).frame(height: 1) }
         }
     }
 

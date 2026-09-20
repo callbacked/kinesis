@@ -6,7 +6,7 @@ import SwiftUI
 /// person has to do with their hands, and what went wrong.
 struct PairBandControl: View {
     @ObservedObject var model: BandModel
-    var layout = PairingFlowView.Layout.card
+    var layout = PairingFlowView.Layout.leading
     var idleHeadline: String?
     var body: some View {
         PairingFlowView(state: model.pairing, layout: layout, showsButton: layout == .centered,
@@ -24,9 +24,9 @@ struct PairBandControl: View {
 /// pairing state can be rendered and checked without a band. The sign-in sheet
 /// lives at the window root, so a run can reach it from any page.
 struct PairingFlowView: View {
-    enum Layout { case card, centered }
+    enum Layout { case leading, centered }
     let state: PairingPresentation
-    var layout = Layout.card
+    var layout = Layout.leading
     /// The band pane carries the pair button in the window. Setup has no pane, so the flow does.
     var showsButton = true
     /// Setup greets a fresh band with its own line instead of "pair your band".
@@ -50,10 +50,10 @@ struct PairingFlowView: View {
                     .foregroundStyle(KinesisStyle.secondary).padding(.bottom, 12)
             }
             PairStepper(state: state).padding(.bottom, centered ? 26 : 20)
-            Text(headline).font(.system(size: centered ? 36 : 21)).tracking(centered ? -1.4 : -0.5)
+            Text(headline).font(.system(size: centered ? 36 : 24)).tracking(centered ? -1.4 : -0.7)
                 .foregroundStyle(state.needsSystemPairing ? KinesisStyle.blue : KinesisStyle.ink)
                 .multilineTextAlignment(centered ? .center : .leading).contentTransition(.opacity)
-            Text(state.detail).font(.system(size: centered ? 14 : 12.5))
+            Text(state.detail).font(.system(size: centered ? 14 : 13.5))
                 .foregroundStyle(state.failed != nil && state.holdHint != .insist ? KinesisStyle.warning : KinesisStyle.secondary)
                 .lineSpacing(centered ? 5 : 4).multilineTextAlignment(centered ? .center : .leading)
                 .fixedSize(horizontal: false, vertical: true).frame(maxWidth: centered ? 460 : nil)
@@ -89,8 +89,6 @@ struct PairingFlowView: View {
             }.padding(.top, showsButton || state.help != nil || state.offersOtherAccount ? (centered ? 26 : 20) : 0)
         }
         .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
-        .padding(centered ? 0 : 24)
-        .background(centered ? Color.clear : KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 18))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: state)
         .accessibilityElement(children: .contain)
     }

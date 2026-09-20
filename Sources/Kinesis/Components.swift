@@ -266,3 +266,51 @@ struct GestureLight<Content: View>: View {
             }
     }
 }
+
+/// A small grey word that names a group of rows, as "information" and "options" do.
+struct SectionLabel: View {
+    let text: String
+    var body: some View {
+        Text(text).font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// One line on open ground: what it is, how it is, and its control at the right
+/// edge. No box. The row under the pointer gets a soft band that bleeds past the
+/// text, and a row can light blue while its gesture is being performed.
+struct OpenRow<Control: View>: View {
+    var symbol: String?
+    let title: String
+    var detail: String?
+    var lit = false
+    @ViewBuilder var control: Control
+    @State private var hovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            if let symbol {
+                Image(systemName: symbol).font(.system(size: 14)).frame(width: 22)
+                    .foregroundStyle(lit ? KinesisStyle.blue : KinesisStyle.secondary)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.system(size: 15)).foregroundStyle(lit ? KinesisStyle.blue : KinesisStyle.ink)
+                if let detail {
+                    Text(detail).font(.system(size: 12.5)).foregroundStyle(KinesisStyle.secondary)
+                        .fixedSize(horizontal: false, vertical: true).contentTransition(.opacity)
+                }
+            }
+            Spacer(minLength: 12)
+            control
+        }
+        .padding(.vertical, detail == nil ? 13 : 15).padding(.horizontal, 14)
+        .background(RoundedRectangle(cornerRadius: 13)
+            .fill(lit ? KinesisStyle.blue.opacity(0.11) : hovered ? KinesisStyle.tray : .clear))
+        // The band bleeds past the text, so titles still line up with the page edge.
+        .padding(.horizontal, -14)
+        .onHover { hovered = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: hovered)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: lit)
+    }
+}

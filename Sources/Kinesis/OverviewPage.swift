@@ -32,7 +32,7 @@ struct OverviewPage: View {
             }
             GestureMap(model: model)
             if model.live && !model.accessibilityAllowed {
-                PermissionCard(model: model)
+                PermissionRow(model: model)
             } else {
                 Text(model.lastAction.lowercased()).font(KinesisType.caption)
                     .foregroundStyle(KinesisStyle.secondary).lineLimit(2).contentTransition(.opacity)
