@@ -8,7 +8,11 @@
 use your meta neural band to control your mac
 
 
-https://github.com/user-attachments/assets/25e974bc-a6ca-450f-83f0-732c6d40075c
+
+
+https://github.com/user-attachments/assets/43ed6094-5c66-4992-aacd-e010dae3f4fa
+
+
 
 
 
