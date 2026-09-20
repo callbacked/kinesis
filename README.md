@@ -21,9 +21,15 @@ some things may act quirky or not work at all, if that is the case i would love 
 ## run it
 **be sure to unpair your band from the meta app before you get started**
 
+a [factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) on the band is a good idea too, so it has no old owner
+
 [download kinesis](https://github.com/callbacked/kinesis/releases/latest), open the dmg, and drag it into applications. needs macos 14+ and a neural band. works on apple silicon and intel.
 
-set your band in pairing mode, connect, and allow bluetooth + accessibility when prompted. enable controls and you're in.
+set your band in pairing mode, hit pair band, and sign in with meta once. allow bluetooth + accessibility when prompted, and accept the bluetooth pairing request from macos. enable controls and you're in.
+
+## why the meta sign-in
+
+the band only trusts an owner that meta has enrolled. kinesis opens meta's own sign-in page once, claims the band for your mac, and keeps the session token in your keychain. it only gets that token, not your password. forget band clears the band's key, and can sign you out too.
 
 ## build it
 
