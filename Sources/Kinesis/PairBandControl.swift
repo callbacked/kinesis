@@ -51,7 +51,7 @@ struct PairingFlowView: View {
             }
             PairStepper(state: state).padding(.bottom, centered ? 26 : 20)
             Text(headline).font(.system(size: centered ? 36 : 24)).tracking(centered ? -1.4 : -0.7)
-                .foregroundStyle(state.needsSystemPairing ? KinesisStyle.blue : KinesisStyle.ink)
+                .foregroundStyle(state.needsSystemPairing ? KinesisStyle.accent : KinesisStyle.ink)
                 .multilineTextAlignment(centered ? .center : .leading).contentTransition(.opacity)
             Text(state.detail).font(.system(size: centered ? 14 : 13.5))
                 .foregroundStyle(state.failed != nil && state.holdHint != .insist ? KinesisStyle.warning : KinesisStyle.secondary)
@@ -66,7 +66,7 @@ struct PairingFlowView: View {
                     Button(action: pair) {
                         HStack(spacing: 9) {
                             if state.working {
-                                ProgressView().controlSize(.mini).tint(KinesisStyle.blue)
+                                ProgressView().controlSize(.mini).tint(KinesisStyle.accent)
                             } else {
                                 Image(systemName: state.failed == nil ? "dot.radiowaves.left.and.right" : "arrow.clockwise")
                                     .font(.system(size: 11))
@@ -148,8 +148,8 @@ private struct StepDot: View {
             case .upcoming:
                 Circle().strokeBorder(KinesisStyle.line, lineWidth: 1.5)
             case .current:
-                Circle().fill(KinesisStyle.blue.opacity(0.22)).scaleEffect(pulsing ? 1.9 : 1).opacity(pulsing ? 0 : 1)
-                Circle().fill(KinesisStyle.blue).padding(3)
+                Circle().fill(KinesisStyle.accent.opacity(0.22)).scaleEffect(pulsing ? 1.9 : 1).opacity(pulsing ? 0 : 1)
+                Circle().fill(KinesisStyle.accent).padding(3)
             case .done:
                 Circle().fill(KinesisStyle.green)
                 Image(systemName: "checkmark").font(.system(size: 6.5, weight: .heavy)).foregroundStyle(KinesisStyle.paper)
@@ -176,7 +176,7 @@ private struct ClaimTicks: View {
     var body: some View {
         HStack(spacing: 5) {
             ForEach(1...4, id: \.self) { index in
-                Capsule().fill(index <= progress ? KinesisStyle.blue : KinesisStyle.line)
+                Capsule().fill(index <= progress ? KinesisStyle.accent : KinesisStyle.line)
                     .frame(width: index == progress ? 22 : 12, height: 4)
             }
         }
@@ -197,11 +197,11 @@ struct HoldArtwork: View {
                     // The button sits on the capsule under the top arc of the product image.
                     let center = CGPoint(x: geometry.size.width * 0.5, y: geometry.size.height * 0.25)
                     ZStack {
-                        Circle().stroke(KinesisStyle.blue.opacity(0.85), lineWidth: 1.5)
+                        Circle().stroke(KinesisStyle.accent.opacity(0.85), lineWidth: 1.5)
                             .frame(width: 26, height: 26)
                             .scaleEffect(ringing ? 2.1 : 0.7).opacity(ringing ? 0 : 1)
-                        Circle().fill(KinesisStyle.blue).frame(width: 7, height: 7)
-                            .shadow(color: KinesisStyle.blue.opacity(0.9), radius: 6)
+                        Circle().fill(KinesisStyle.accent).frame(width: 7, height: 7)
+                            .shadow(color: KinesisStyle.accent.opacity(0.9), radius: 6)
                     }
                     .position(center)
                     .opacity(hint == .none ? 0 : 1)

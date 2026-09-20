@@ -115,6 +115,7 @@ struct HandSceneView: NSViewRepresentable {
                     float indexLight;
                     float middleLight;
                     float darkAppearance;
+                    float3 glowColor;
                     #pragma transparent
                     #pragma body
                     float alongHand = _surface.diffuseTexcoord.y;
@@ -122,16 +123,15 @@ struct HandSceneView: NSViewRepresentable {
                     float rim = pow(1.0 - abs(dot(normalize(_surface.normal), normalize(_surface.view))), 2.0);
                     float shade = 0.5 + 0.5 * max(0.0, dot(normalize(_surface.normal), normalize(float3(-0.4, 0.6, 1.0))));
                     float glow = max(in.tipInfluence.x * thumbLight, max(in.tipInfluence.y * indexLight, in.tipInfluence.z * middleLight));
-                    // A white hand on the light field, the way the reference draws it: nearly flat,
-                    // with just enough cool shadow and edge to read. On the dark field it is
+                    // A white hand on the light field: nearly flat, with just enough cool shadow
+                    // and edge to read. On the dark field it is
                     // porcelain in low light, a few steps above the ground, never a white cutout.
-                    float3 paleLight = mix(float3(0.985, 0.988, 0.992), float3(0.70, 0.735, 0.79), 1.0 - shade);
+                    float3 paleLight = mix(float3(0.99, 0.99, 0.992), float3(0.72, 0.745, 0.775), 1.0 - shade);
                     paleLight *= 1.0 - 0.3 * rim;
-                    float3 paleDark = mix(float3(0.60, 0.65, 0.70), float3(0.20, 0.235, 0.27), 1.0 - shade);
+                    float3 paleDark = mix(float3(0.63, 0.655, 0.68), float3(0.215, 0.232, 0.25), 1.0 - shade);
                     paleDark += 0.10 * rim;
                     float3 skin = mix(paleLight, paleDark, darkAppearance);
-                    float3 lit = mix(float3(0.10, 0.50, 0.96), float3(0.36, 0.78, 1.0), darkAppearance);
-                    _surface.diffuse.rgb = mix(skin, lit, glow * 0.92);
+                    _surface.diffuse.rgb = mix(skin, glowColor, glow * 0.92);
                     _surface.diffuse.a = fade;
                     """, .fragment: """
                     #pragma transparent
@@ -212,6 +212,8 @@ struct HandSceneView: NSViewRepresentable {
             // No ground of its own: the window's field shows through, so the hand floats on it.
             scene.background.contents = NSColor.clear
             material.setValue(dark ? 1.0 : 0.0, forKey: "darkAppearance")
+            let glow = KinesisStyle.glow(dark: dark)
+            material.setValue(SCNVector3(CGFloat(glow.x), CGFloat(glow.y), CGFloat(glow.z)), forKey: "glowColor")
         }
 
         func show(_ next: HandHighlight, gesture: RecognizedGesture? = nil, revision: Int, sustained: Bool,

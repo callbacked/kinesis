@@ -9,6 +9,7 @@ struct OverviewPage: View {
     @State private var dialRouter = DialRouter()
     @State private var dialAngle = 0.0
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -35,8 +36,7 @@ struct OverviewPage: View {
         ZStack {
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
-                // The ring sits on top of the hand's view. Behind it, the view's square
-                // hid all of the ring but the parts that poked out past its corners.
+                // The electrodes sit on top of the hand's view, so its square never hides them.
                 HandView(scene: HandSceneView(hand: model.bandHand, highlight: handHighlight, gesture: model.recognizedGesture,
                                               revision: model.gestureCount, sustained: model.pinchedFinger != nil || model.dialEngaged,
                                               roll: model.dialEngaged ? dialAngle * 0.55 : 0))
@@ -47,16 +47,13 @@ struct OverviewPage: View {
                         Circle().fill(RadialGradient(colors: [KinesisStyle.pool, .clear], center: .center, startRadius: 30, endRadius: 190))
                             .padding(-15).opacity(scheme == .dark ? 1 : 0)
                     }
-                    .overlay { DialRing(angle: dialAngle, engaged: model.dialEngaged && model.live).allowsHitTesting(false) }
+                    .overlay {
+                        ElectrodeRing(angle: dialAngle, engaged: model.dialEngaged && model.live ? 1 : 0)
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.dialEngaged)
+                            .allowsHitTesting(false)
+                    }
             }
-            VStack(alignment: .leading, spacing: 0) {
-                ConnectionBadge(live: model.controlsEnabled && model.live,
-                                text: model.controlsEnabled ? "controls live" : "controls paused")
-                Spacer()
-                GestureCaption(model: model)
-                Spacer()
-                Spacer().frame(height: 16)
-            }.frame(maxWidth: .infinity, alignment: .leading)
+            GestureCaption(model: model).frame(maxWidth: .infinity, alignment: .leading)
         }.frame(height: 350)
     }
 
@@ -116,7 +113,7 @@ private struct GestureCaption: View {
                         Text(model.controlsEnabled ? action : "paused · " + action)
                     }
                     .font(KinesisType.label)
-                    .foregroundStyle(model.controlsEnabled && action != "unassigned" ? KinesisStyle.blue : KinesisStyle.secondary)
+                    .foregroundStyle(model.controlsEnabled && action != "unassigned" ? KinesisStyle.accent : KinesisStyle.secondary)
                     .opacity(0.5 + 0.5 * glow)
                 }
             }
@@ -125,22 +122,35 @@ private struct GestureCaption: View {
     }
 }
 
-/// A thin ring around the hand. While you hold a pinch and turn, a short arc
-/// rides it to show how far you have turned.
-private struct DialRing: View {
-    let angle: Double
-    let engaged: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+/// Sixteen points around the hand, one for each electrode on the band. At rest they are
+/// barely there. While you hold a pinch and turn, the ones your wrist points at light up.
+private struct ElectrodeRing: View, Animatable {
+    /// Degrees of turn, zero at the top.
+    var angle: Double
+    /// 0 to 1: how far the dial is engaged.
+    var engaged: Double
+
+    nonisolated var animatableData: AnimatablePair<Double, Double> {
+        get { AnimatablePair(angle, engaged) }
+        set { (angle, engaged) = (newValue.first, newValue.second) }
+    }
+
     var body: some View {
-        ZStack {
-            Circle().stroke(KinesisStyle.line, lineWidth: 1)
-            Circle().trim(from: 0, to: 0.07)
-                .stroke(KinesisStyle.blue, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                .rotationEffect(.degrees(-90 - 12.6 + angle))
-                .opacity(engaged ? 1 : 0)
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let radius = min(size.width, size.height) / 2 - 10
+            for electrode in 0..<16 {
+                let degrees = Double(electrode) * 22.5
+                var apart = abs((degrees - angle).truncatingRemainder(dividingBy: 360))
+                if apart > 180 { apart = 360 - apart }
+                let lit = engaged * max(0, 1 - apart / 36)
+                let turn = (degrees - 90) * .pi / 180, width = 3 + 3 * lit
+                let dot = Path(ellipseIn: CGRect(x: center.x + radius * cos(turn) - width / 2, y: center.y + radius * sin(turn) - width / 2,
+                                                 width: width, height: width))
+                context.fill(dot, with: .color(KinesisStyle.ink.opacity(0.24)))
+                if lit > 0.01 { context.fill(dot, with: .color(KinesisStyle.accent.opacity(lit))) }
+            }
         }
-        .padding(8)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: engaged)
         .accessibilityHidden(true)
     }
 }
@@ -195,18 +205,18 @@ private struct GestureMap: View {
                                 Image(systemName: entry.symbol).font(.system(size: 12)).frame(width: 18)
                                     .foregroundStyle(KinesisStyle.secondary)
                                     .overlay(Image(systemName: entry.symbol).font(.system(size: 12))
-                                        .foregroundStyle(KinesisStyle.blue).opacity(glow))
+                                        .foregroundStyle(KinesisStyle.accent).opacity(glow))
                                 Text(entry.gesture).font(KinesisType.body)
                                 Spacer(minLength: 8)
                                 Text(entry.action).font(KinesisType.caption).lineLimit(1)
                                     .foregroundStyle(KinesisStyle.secondary)
                                     .overlay(alignment: .trailing) {
                                         Text(entry.action).font(KinesisType.caption).lineLimit(1)
-                                            .foregroundStyle(KinesisStyle.blue).opacity(glow)
+                                            .foregroundStyle(KinesisStyle.accent).opacity(glow)
                                     }
                             }
                             .padding(.horizontal, 12).padding(.vertical, 9)
-                            .background(KinesisStyle.blue.opacity(0.13 * glow), in: RoundedRectangle(cornerRadius: 10))
+                            .background(KinesisStyle.accent.opacity(0.13 * glow), in: RoundedRectangle(cornerRadius: 10))
                             .accessibilityElement(children: .combine)
                         }
                     }

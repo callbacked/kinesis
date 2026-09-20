@@ -117,7 +117,7 @@ struct KinesisToggleStyle: ToggleStyle {
         Button {
             configuration.isOn.toggle()
         } label: {
-            Capsule().fill(configuration.isOn ? KinesisStyle.blue : KinesisStyle.trayStrong)
+            Capsule().fill(configuration.isOn ? KinesisStyle.accent : KinesisStyle.trayStrong)
                 .frame(width: 40, height: 23)
                 .overlay(alignment: configuration.isOn ? .trailing : .leading) {
                     Circle().fill(.white).padding(2.5)
@@ -147,7 +147,7 @@ struct PillSlider: View {
             let travel = max(geometry.size.width - knob, 1)
             ZStack(alignment: .leading) {
                 Capsule().fill(KinesisStyle.tray).frame(height: 8)
-                Capsule().fill(KinesisStyle.blue).frame(width: knob / 2 + travel * fraction, height: 8)
+                Capsule().fill(KinesisStyle.accent).frame(width: knob / 2 + travel * fraction, height: 8)
                 Circle().fill(.white).frame(width: knob, height: knob)
                     .shadow(color: .black.opacity(0.25), radius: dragging ? 5 : 2, y: 1)
                     .scaleEffect(dragging ? 1.12 : 1)
@@ -240,7 +240,7 @@ struct Pairing: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
             Text(value).font(KinesisType.headline).tracking(-0.4).monospacedDigit()
-                .foregroundStyle(live ? KinesisStyle.blue : KinesisStyle.ink)
+                .foregroundStyle(live ? KinesisStyle.accent : KinesisStyle.ink)
                 .contentTransition(.numericText()).lineLimit(1)
         }.accessibilityElement(children: .combine)
     }
@@ -297,12 +297,12 @@ struct SectionLabel: View {
 
 /// One line on open ground: what it is, how it is, and its control at the right
 /// edge. No box. The row under the pointer gets a soft band that bleeds past the
-/// text, and a row can light blue while its gesture is being performed.
+/// text, and a row can light in the accent while its gesture is being performed.
 struct OpenRow<Control: View>: View {
     var symbol: String?
     let title: String
     var detail: String?
-    /// 0 to 1. The row is blue by this much, as a gesture flashes and fades.
+    /// 0 to 1. The row takes the accent by this much, as a gesture flashes and fades.
     var glow = 0.0
     @ViewBuilder var control: Control
     @State private var hovered = false
@@ -313,11 +313,11 @@ struct OpenRow<Control: View>: View {
             if let symbol {
                 Image(systemName: symbol).font(.system(size: 14)).frame(width: 22)
                     .foregroundStyle(KinesisStyle.secondary)
-                    .overlay(Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(KinesisStyle.blue).opacity(glow))
+                    .overlay(Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(KinesisStyle.accent).opacity(glow))
             }
             VStack(alignment: .leading, spacing: 5) {
                 Text(title).font(.system(size: 15)).foregroundStyle(KinesisStyle.ink)
-                    .overlay(alignment: .leading) { Text(title).font(.system(size: 15)).foregroundStyle(KinesisStyle.blue).opacity(glow) }
+                    .overlay(alignment: .leading) { Text(title).font(.system(size: 15)).foregroundStyle(KinesisStyle.accent).opacity(glow) }
                 if let detail {
                     Text(detail).font(.system(size: 12.5)).foregroundStyle(KinesisStyle.secondary)
                         .fixedSize(horizontal: false, vertical: true).contentTransition(.opacity)
@@ -328,7 +328,7 @@ struct OpenRow<Control: View>: View {
         }
         .padding(.vertical, detail == nil ? 13 : 15).padding(.horizontal, 14)
         .background(RoundedRectangle(cornerRadius: 13).fill(hovered ? KinesisStyle.tray : .clear))
-        .background(RoundedRectangle(cornerRadius: 13).fill(KinesisStyle.blue.opacity(0.13 * glow)))
+        .background(RoundedRectangle(cornerRadius: 13).fill(KinesisStyle.accent.opacity(0.13 * glow)))
         // The band bleeds past the text, so titles still line up with the page edge.
         .padding(.horizontal, -14)
         .onHover { hovered = $0 }

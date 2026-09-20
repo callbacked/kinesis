@@ -47,7 +47,7 @@ private struct AllowedControls: MacControls {
     let band = "render-\(UUID().uuidString)"
     defer { BandIdentity.delete(for: band) }
 
-    func model(paired: Bool, live: Bool, trusted: Bool = true) throws -> BandModel {
+    func model(paired: Bool, live: Bool, trusted: Bool = true, turning: Bool = false) throws -> BandModel {
         let suite = "kinesis-render-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defaults.set(true, forKey: "setupCompleted")
@@ -66,6 +66,8 @@ private struct AllowedControls: MacControls {
             connection.send(.battery(86))
             connection.send(.handedness(.right))
             model.toggleControls()
+            // A held pinch lights the accent everywhere it lives: the hand, the electrodes, the row.
+            if turning { connection.send(.dialState(true)) }
         }
         return model
     }
@@ -117,6 +119,7 @@ private struct AllowedControls: MacControls {
     ]
     let windows: [(String, AnyView)] = [
         ("overview-live", AnyView(MainView(model: try model(paired: true, live: true), scrolls: false))),
+        ("overview-turning", AnyView(MainView(model: try model(paired: true, live: true, turning: true), scrolls: false))),
         ("overview-offline", AnyView(MainView(model: try model(paired: true, live: false), scrolls: false))),
         ("gestures", AnyView(MainView(model: try model(paired: true, live: true), page: .gestures, scrolls: false))),
         ("band-paired", AnyView(MainView(model: try model(paired: true, live: true), page: .band, scrolls: false))),
@@ -128,9 +131,13 @@ private struct AllowedControls: MacControls {
         ("setup-3-ready", AnyView(setup(try model(paired: true, live: true, trusted: false), step: 3))),
     ]
     // SceneKit does not draw inside ImageRenderer, so the hand is drawn on its own and handed in.
-    func hand(dark: Bool, teaching: Bool) throws -> NSImage {
+    func hand(dark: Bool, teaching: Bool, pinching: Bool) throws -> NSImage {
         let coordinator = HandSceneView.Coordinator(viewpoint: teaching ? .teaching : .overview)
         coordinator.setBackground(dark: dark)
+        if pinching {
+            coordinator.rig?.snap(to: .pinchIndex)
+            coordinator.setIllumination(SIMD3(1, 1, 0))
+        }
         let device = try #require(MTLCreateSystemDefaultDevice())
         let renderer = SCNRenderer(device: device, options: nil)
         renderer.scene = coordinator.scene
@@ -141,7 +148,7 @@ private struct AllowedControls: MacControls {
         let size = name.hasPrefix("edge") ? smallest : CGSize(width: 980, height: 730)
         for (mode, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light), ("dark", .darkAqua, .dark)] {
             var png: Data?
-            let standIn = try hand(dark: scheme == .dark, teaching: name.hasPrefix("setup"))
+            let standIn = try hand(dark: scheme == .dark, teaching: name.hasPrefix("setup"), pinching: name.hasSuffix("turning"))
             NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
                 let renderer = ImageRenderer(content: window.frame(width: size.width, height: size.height).environment(\.colorScheme, scheme)
                     .environment(\.handStandIn, standIn))

@@ -186,7 +186,7 @@ struct SetupView: View {
         switch step {
         case 0:
             ZStack {
-                Circle().fill(RadialGradient(colors: [KinesisStyle.blue.opacity(model.live ? 0.16 : 0.07), .clear],
+                Circle().fill(RadialGradient(colors: [KinesisStyle.accent.opacity(model.live ? 0.16 : 0.07), .clear],
                                              center: .center, startRadius: 10, endRadius: 210))
                     .frame(width: 420, height: 420)
                 HoldArtwork(hint: model.pairing.holdHint).frame(width: 400, height: 262)
@@ -200,17 +200,17 @@ struct SetupView: View {
                                               gesture: received.isEmpty ? .swipe(preview) : model.recognizedGesture,
                                               revision: revision, sustained: model.pinchedFinger != nil, viewpoint: .teaching))
                 RoundedRectangle(cornerRadius: 24)
-                    .stroke(KinesisStyle.blue.opacity(feedbackVisible ? 0.3 : 0), lineWidth: 16)
+                    .stroke(KinesisStyle.accent.opacity(feedbackVisible ? 0.3 : 0), lineWidth: 16)
                     .blur(radius: 18).allowsHitTesting(false)
                 HStack(spacing: 8) {
                     Image(systemName: received.isEmpty ? preview.symbol : "checkmark.circle.fill")
                         .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                     Text(received.isEmpty ? "swipe \(preview.rawValue)" : received).contentTransition(.opacity)
                 }.font(KinesisType.label)
-                    .foregroundStyle(received.isEmpty ? KinesisStyle.secondary : KinesisStyle.blue)
+                    .foregroundStyle(received.isEmpty ? KinesisStyle.secondary : KinesisStyle.accent)
                     .padding(.bottom, 22)
             }.frame(width: 540).clipShape(RoundedRectangle(cornerRadius: 24))
-                .shadow(color: KinesisStyle.blue.opacity(feedbackVisible ? 0.24 : 0), radius: 24)
+                .shadow(color: KinesisStyle.accent.opacity(feedbackVisible ? 0.24 : 0), radius: 24)
         case 2:
             PracticeDial(value: practiceValue, engaged: model.dialEngaged && model.live)
         default:
@@ -254,7 +254,7 @@ struct SetupView: View {
                                 .font(.system(size: 14, weight: .medium)).frame(width: 42, height: 42)
                                 .foregroundStyle(swipes.contains(direction) ? KinesisStyle.paper : KinesisStyle.ink)
                                 .background(swipes.contains(direction) ? KinesisStyle.green : KinesisStyle.tray, in: Circle())
-                                .overlay(Circle().strokeBorder(preview == direction ? KinesisStyle.blue : .clear, lineWidth: 1.5).padding(-3))
+                                .overlay(Circle().strokeBorder(preview == direction ? KinesisStyle.accent : .clear, lineWidth: 1.5).padding(-3))
                                 .contentTransition(.symbolEffect(.replace))
                         }.buttonStyle(KinesisPressStyle())
                             .accessibilityLabel("Preview swipe \(direction.rawValue)\(swipes.contains(direction) ? ", received" : "")")
@@ -312,14 +312,14 @@ private struct PracticeDial: View {
     var body: some View {
         ZStack {
             Circle().fill(KinesisStyle.surface)
-                .shadow(color: KinesisStyle.blue.opacity(engaged ? 0.18 : 0), radius: 28)
+                .shadow(color: KinesisStyle.accent.opacity(engaged ? 0.18 : 0), radius: 28)
             ForEach(0..<41) { tick in
-                Capsule().fill(Double(tick) <= value / 2.5 ? KinesisStyle.blue : KinesisStyle.line)
+                Capsule().fill(Double(tick) <= value / 2.5 ? KinesisStyle.accent : KinesisStyle.line)
                     .frame(width: 2, height: tick.isMultiple(of: 5) ? 12 : 7)
                     .offset(y: -105)
                     .rotationEffect(.degrees(-135 + Double(tick) * 6.75))
             }
-            Circle().fill(KinesisStyle.blue).frame(width: 7, height: 7)
+            Circle().fill(KinesisStyle.accent).frame(width: 7, height: 7)
                 .offset(y: -82).rotationEffect(.degrees(-135 + value * 2.7))
             Text(value.formatted(.number.precision(.fractionLength(0))))
                 .font(.system(size: 54, weight: .light)).monospacedDigit()

@@ -104,10 +104,10 @@ struct BandPane: View {
     private var state: some View {
         HStack(spacing: 7) {
             PulseDot(color: model.live ? KinesisStyle.green
-                        : model.inTransit ? KinesisStyle.blue : KinesisStyle.secondary.opacity(0.55),
+                        : model.inTransit ? KinesisStyle.accent : KinesisStyle.secondary.opacity(0.55),
                      pulsing: model.inTransit)
             Text(stateText).font(KinesisType.micro)
-                .foregroundStyle(model.inTransit ? KinesisStyle.blue : KinesisStyle.secondary)
+                .foregroundStyle(model.inTransit ? KinesisStyle.accent : KinesisStyle.secondary)
                 .contentTransition(.opacity)
         }
         .animation(reduceMotion ? nil : KinesisMotion.settle, value: stateText)
@@ -124,7 +124,7 @@ struct BandPane: View {
 
     @ViewBuilder private var notice: some View {
         if model.awaitingSystemPairing {
-            PaneNotice(symbol: "hand.tap", text: "accept the bluetooth request", tint: KinesisStyle.blue)
+            PaneNotice(symbol: "hand.tap", text: "accept the bluetooth request", tint: KinesisStyle.accent)
         } else if model.live, let battery = model.battery, battery <= 15 {
             PaneNotice(symbol: "bolt.fill", text: "low battery", tint: KinesisStyle.warning)
         } else {
@@ -138,7 +138,7 @@ struct BandPane: View {
             Button { perform(action) } label: {
                 HStack(spacing: 9) {
                     if action.waits {
-                        ProgressView().controlSize(.mini).tint(KinesisStyle.blue)
+                        ProgressView().controlSize(.mini).tint(KinesisStyle.accent)
                     } else if let symbol = action.symbol {
                         Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
                     }
