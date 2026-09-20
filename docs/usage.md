@@ -18,11 +18,15 @@ the script uses your apple development signing identity if exactly one is availa
 ## connect
 
 1. stop the old browser console's band connection if it's running.
-2. put your band in pairing mode, click **find band**, select it, then **connect**. it remembers the band afterward.
-3. allow bluetooth when macos asks. grant kinesis accessibility access to send shortcuts.
+2. put your band in pairing mode (hold its button for 3 seconds until it flashes) and click **pair band**. kinesis finds it, signs you in with meta once, and claims it for this mac. it remembers the band afterward.
+3. allow bluetooth when macos asks, and accept the bluetooth pairing request. grant kinesis accessibility access to send shortcuts.
 4. click **enable controls** and try a gesture.
 
-closing the window keeps the connection in the menu bar. pause controls there whenever you want. quitting disconnects the band. the battery reading refreshes while connected.
+closing the window keeps the connection in the menu bar. pause controls there whenever you want. quitting disconnects the band. the battery reading refreshes while connected. **disconnect** and **connect** live on the band card under **band**.
+
+the meta sign-in happens once, on meta's own page. the band only trusts an owner that meta has enrolled, so kinesis needs your account to claim it. the session token lives in your keychain. [enrollment notes](enrollment.md) cover the details.
+
+**forget this band** under **band** clears the band, its key, and your meta sign-in from this mac. the band itself stays claimed, so [factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) it too: hold its button for about 16 seconds.
 
 turn on **start automatically** under **band** to reconnect and enable controls when kinesis opens. it waits for a live connection and accessibility access. pausing or opening quick setup keeps controls paused for the rest of that run, until you enable them again.
 
