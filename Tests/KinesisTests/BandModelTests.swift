@@ -1040,6 +1040,44 @@ private struct FakePairClient: BandPairClient {
     await model.shutdown()
 }
 
+@Test @MainActor func theBandPaneAlwaysOffersTheNextUsefulStep() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(true, forKey: "setupCompleted")
+    let band = "test-\(UUID().uuidString)"
+    defer { BandIdentity.delete(for: band) }
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: SavedSessionStore(), clock: { 100 })
+    // Nothing remembered: pair. A run in flight: wait for it.
+    #expect(model.nextAction == .pair && !model.inTransit)
+    model.pairBand()
+    #expect(model.nextAction == .pairing && model.nextAction.waits && model.inTransit)
+    model.cancelPairing()
+    try await waitUntil { !model.busy }
+    #expect(model.nextAction == .pair)
+    // A paired band: connect, then hand it the Mac, then take it back.
+    defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
+    try BandIdentity.generate(for: band)
+    let paired = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                           pairClient: { _ in FakePairClient() }, sessionStore: SavedSessionStore(), clock: { 100 })
+    #expect(paired.nextAction == .connect)
+    paired.connect()
+    #expect(paired.nextAction == .connecting && paired.inTransit)
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    try await waitUntil { paired.live }
+    #expect(paired.nextAction == .enableControls && !paired.inTransit)
+    paired.toggleControls()
+    #expect(paired.nextAction == .pauseControls)
+    paired.disconnect()
+    try await waitUntil { !paired.busy }
+    #expect(paired.nextAction == .connect)
+    await model.shutdown()
+    await paired.shutdown()
+}
+
 @Test @MainActor func aPairedBandDisconnectedByHandCanConnectAgain() async throws {
     let suite = "kinesis-tests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))

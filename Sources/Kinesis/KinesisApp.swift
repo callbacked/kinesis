@@ -29,9 +29,31 @@ struct KinesisApp: App {
         .defaultSize(width: 980, height: 730)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        MenuBarExtra("Kinesis", systemImage: "waveform") {
+        MenuBarExtra {
             BandMenu(model: delegate.model)
+        } label: {
+            MenuBarLabel(model: delegate.model)
         }
+    }
+}
+
+/// The kinesis mark in the menu bar. It is a template image, so macOS tints it
+/// for light and dark menu bars. It dims while gestures are not reaching the Mac.
+private struct MenuBarLabel: View {
+    @ObservedObject var model: BandModel
+    var body: some View {
+        Image(nsImage: Self.icon(active: model.live && model.controlsEnabled))
+            .accessibilityLabel(model.live && model.controlsEnabled ? "Kinesis, controls live" : "Kinesis")
+    }
+
+    private static func icon(active: Bool) -> NSImage {
+        let mark = KinesisMark(size: CGSize(width: 20, height: 17), lineWidth: 5.6)
+            .foregroundStyle(.black).opacity(active ? 1 : 0.5)
+        let renderer = ImageRenderer(content: mark)
+        renderer.scale = 3
+        let image = renderer.nsImage ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: nil) ?? NSImage()
+        image.isTemplate = true
+        return image
     }
 }
 

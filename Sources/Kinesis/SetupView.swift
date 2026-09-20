@@ -178,7 +178,9 @@ struct SetupView: View {
     @ViewBuilder private var artwork: some View {
         if step == 0 {
             VStack(spacing: 20) {
-                BandArtwork().frame(maxWidth: 440).frame(height: 275)
+                HoldArtwork(hint: model.pairing.holdHint).frame(maxWidth: 440).frame(height: 275)
+                    .saturation(model.live || model.pairInProgress ? 1 : 0.35)
+                    .animation(.easeInOut(duration: 0.45), value: model.live || model.pairInProgress)
                 VStack(spacing: 10) {
                     Text("which hand is your band on?").font(.system(size: 13, weight: .medium))
                     Picker("Band hand", selection: Binding(get: { model.pendingHand ?? model.bandHand }, set: { model.selectHand($0) })) {

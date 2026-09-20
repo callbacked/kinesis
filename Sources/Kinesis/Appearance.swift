@@ -48,6 +48,14 @@ enum KinesisStyle {
     static let blue = adaptive(light: NSColor(red: 0.15, green: 0.44, blue: 0.7, alpha: 1), dark: NSColor(red: 0.42, green: 0.7, blue: 0.96, alpha: 1))
     static let warning = adaptive(light: NSColor(red: 0.58, green: 0.31, blue: 0.16, alpha: 1), dark: NSColor(red: 0.92, green: 0.64, blue: 0.42, alpha: 1))
     static let rail = Color(red: 0.115, green: 0.125, blue: 0.12)
+    /// The tray that holds pills, and the chip that marks the chosen one.
+    static let tray = adaptive(light: NSColor(white: 0, alpha: 0.055), dark: NSColor(white: 1, alpha: 0.075))
+    static let trayHover = adaptive(light: NSColor(white: 0, alpha: 0.09), dark: NSColor(white: 1, alpha: 0.12))
+    static let trayStrong = adaptive(light: NSColor(white: 0, alpha: 0.16), dark: NSColor(white: 1, alpha: 0.2))
+    static let chip = adaptive(light: NSColor(white: 1, alpha: 1), dark: NSColor(white: 1, alpha: 0.17))
+    /// The band pane is dark slate in both modes: the band is an object on its own ground.
+    static let paneTop = Color(red: 0.165, green: 0.195, blue: 0.215)
+    static let paneBottom = Color(red: 0.095, green: 0.11, blue: 0.122)
 
     private static func adaptive(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

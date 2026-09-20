@@ -22,7 +22,7 @@ the script uses your apple development signing identity if exactly one is availa
 3. allow bluetooth when macos asks, and accept the bluetooth pairing request. grant kinesis accessibility access to send shortcuts.
 4. click **enable controls** and try a gesture.
 
-closing the window keeps the connection in the menu bar. pause controls there whenever you want. quitting disconnects the band. the battery reading refreshes while connected. **disconnect** and **connect** live on the band card under **band**.
+closing the window keeps the connection in the menu bar. pause controls there whenever you want. quitting disconnects the band. the battery reading refreshes while connected. the dark pane on the left is your band: its state, battery, and one button that always offers the next step, from **pair band** to **connect** to **enable controls**.
 
 the meta sign-in happens once, on meta's own page. the band only trusts an owner that meta has enrolled, so kinesis needs your account to claim it. the session token lives in your keychain. [enrollment notes](enrollment.md) cover the details.
 

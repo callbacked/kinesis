@@ -8,26 +8,24 @@ struct PairBandControl: View {
     @ObservedObject var model: BandModel
     var compact = false
     var body: some View {
-        PairingFlowView(state: model.pairing, compact: compact,
+        PairingFlowView(state: model.pairing, compact: compact, showsButton: compact,
                         pair: { model.pairBand() }, cancel: { model.cancelPairing() },
                         switchAccount: {
                             // Drop the sign-in that the band refused, then run again: the sheet opens.
                             model.switchMetaAccount()
                             model.pairBand()
                         })
-            .sheet(isPresented: Binding(get: { model.enrollmentStage == .login },
-                                        set: { if !$0 { model.cancelEnrollment() } })) {
-                MetaLoginView(onSession: { model.enroll(session: $0) },
-                              onCancel: { model.cancelEnrollment() })
-            }
     }
 }
 
 /// Draws a `PairingPresentation`. It owns no state beyond animation, so every
-/// pairing state can be rendered and checked without a band.
+/// pairing state can be rendered and checked without a band. The sign-in sheet
+/// lives at the window root, so a run can reach it from any page.
 struct PairingFlowView: View {
     let state: PairingPresentation
     var compact = false
+    /// The band pane carries the pair button in the window. Setup has no pane, so the card does.
+    var showsButton = true
     var pair: () -> Void = {}
     var cancel: () -> Void = {}
     var switchAccount: () -> Void = {}
@@ -35,10 +33,7 @@ struct PairingFlowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 26) {
-            if !compact {
-                HoldArtwork(hint: state.holdHint).frame(width: 150, height: 135)
-                    .saturation(state.dimsArtwork ? 0 : 1).opacity(state.dimsArtwork ? 0.45 : 1)
-            }
+            // The band itself lives in the pane and in setup's artwork, never here.
             VStack(alignment: .leading, spacing: 0) {
                 if let name = state.bandName {
                     Text(name.lowercased()).font(.system(size: 11, weight: .medium))
@@ -56,6 +51,7 @@ struct PairingFlowView: View {
                     ClaimTicks(progress: progress).padding(.top, 14)
                 }
                 HStack(spacing: 14) {
+                    if showsButton {
                     Button(action: pair) {
                         HStack(spacing: 9) {
                             if state.working {
@@ -71,6 +67,7 @@ struct PairingFlowView: View {
                         Button("cancel", action: cancel).buttonStyle(.plain)
                             .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
                     }
+                    }
                     if let help = state.help { GuideLink(title: help.title, url: help.url) }
                     Spacer(minLength: 0)
                     if state.offersOtherAccount {
@@ -78,11 +75,11 @@ struct PairingFlowView: View {
                             .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
                             .help("signs out, then pairs again so you can use the account that owns this band.")
                     }
-                }.padding(.top, 20)
+                }.padding(.top, showsButton || state.help != nil || state.offersOtherAccount ? 20 : 0)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(compact ? 0 : 22)
-        .background(compact ? Color.clear : KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+        .padding(compact ? 0 : 24)
+        .background(compact ? Color.clear : KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 18))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: state)
         .accessibilityElement(children: .contain)
     }
@@ -189,7 +186,7 @@ struct HoldArtwork: View {
             .overlay {
                 GeometryReader { geometry in
                     // The button sits on the capsule under the top arc of the product image.
-                    let center = CGPoint(x: geometry.size.width * 0.5, y: geometry.size.height * 0.23)
+                    let center = CGPoint(x: geometry.size.width * 0.5, y: geometry.size.height * 0.25)
                     ZStack {
                         Circle().stroke(KinesisStyle.blue.opacity(0.85), lineWidth: 1.5)
                             .frame(width: 26, height: 26)
