@@ -31,6 +31,8 @@ struct MetaAuthError: LocalizedError {
 /// The chain itself never writes; the resulting session persists only through
 /// `MetaSessionStore`.
 enum MetaAuth {
+    // Meta's own client identifiers, the same in every copy of Meta's apps. They name the
+    // app that asks, not a person. They are not secrets, and no account or session is in them.
     static let frlClient = "FRL|388177446008673|083800dd7efbbd42eab18c9886d79c18"
     static let arClient = "AR|306760944872162|a919421a55a8ea18080ab2f10f57f1be"
     static let hwClient = "HW|1312539125771114|98588f106d5d542adbf590619ca071fe"
