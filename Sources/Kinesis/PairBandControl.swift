@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The pairing surface on the band page and in setup. The model runs one
@@ -70,14 +71,7 @@ struct PairingFlowView: View {
                         Button("cancel", action: cancel).buttonStyle(.plain)
                             .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
                     }
-                    if let help = state.help {
-                        Link(destination: help.url) {
-                            HStack(spacing: 5) {
-                                Text(help.title)
-                                Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .medium))
-                            }
-                        }.font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
-                    }
+                    if let help = state.help { GuideLink(title: help.title, url: help.url) }
                     Spacer(minLength: 0)
                     if state.offersOtherAccount {
                         Button("sign in with another account", action: switchAccount).buttonStyle(.plain)
@@ -91,6 +85,21 @@ struct PairingFlowView: View {
         .background(compact ? Color.clear : KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 16))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: state)
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// A quiet link out to a guide, such as Meta's factory reset steps.
+struct GuideLink: View {
+    let title: String
+    let url: URL
+    var body: some View {
+        Button { NSWorkspace.shared.open(url) } label: {
+            HStack(spacing: 5) {
+                Text(title)
+                Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .medium))
+            }
+        }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+            .help(url.host ?? "")
     }
 }
 
@@ -171,7 +180,7 @@ private struct ClaimTicks: View {
 }
 
 /// The band, with its button called out while the person has to hold it.
-private struct HoldArtwork: View {
+struct HoldArtwork: View {
     let hint: PairingPresentation.HoldHint
     @State private var ringing = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

@@ -108,7 +108,10 @@ id, device id, universe, obtained-at time); token material never reaches logs.
 - "forget this band" is one confirmed step (`forgetEverything`): it clears the
   remembered band, the stored identity, and the meta session. the session only
   exists to claim a band, so it has no control of its own. the band stays
-  enrolled server-side; pairing again rebinds it.
+  enrolled server-side; pairing again rebinds it. right after the forget, a
+  reminder sheet (`FactoryResetReminder`) says the band is still claimed and
+  how to wipe it, with "i've reset it" as the acknowledgement and a quiet
+  "not now". it records nothing: either answer only closes the sheet.
 - the pairing surface (`PairingFlowView`) draws one value,
   `PairingPresentation`, which `BandModel.pairing` derives from the route, the
   enrollment stage, and the failure. it shows four steps (find, sign in,

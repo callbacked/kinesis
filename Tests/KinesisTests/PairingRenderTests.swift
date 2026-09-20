@@ -32,7 +32,8 @@ import Testing
     }.padding(32).frame(width: 760, alignment: .leading).background(KinesisStyle.paper).foregroundStyle(KinesisStyle.ink)
     let signIn = MetaLoginView(onSession: { _ in }, onCancel: {})
     for (name, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light), ("dark", .darkAqua, .dark)] {
-        for (file, view) in [("pairing", AnyView(sheet)), ("sign-in", AnyView(signIn))] {
+        for (file, view) in [("pairing", AnyView(sheet)), ("sign-in", AnyView(signIn)),
+                             ("reset-reminder", AnyView(FactoryResetReminder(done: {})))] {
             var png: Data?
             NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
                 let renderer = ImageRenderer(content: view.environment(\.colorScheme, scheme))

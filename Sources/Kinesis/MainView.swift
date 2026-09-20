@@ -272,6 +272,7 @@ private struct GestureSettingsView: View {
 private struct BandSettingsView: View {
     @ObservedObject var model: BandModel
     @State private var confirmingForget = false
+    @State private var remindingToReset = false
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             Text("just you and your band.").font(.system(size: 32)).tracking(-1.2)
@@ -307,10 +308,17 @@ private struct BandSettingsView: View {
             }.font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
         }
         .confirmationDialog("forget this band?", isPresented: $confirmingForget, titleVisibility: .visible) {
-            Button("forget band", role: .destructive) { model.forgetEverything() }
+            Button("forget band", role: .destructive) {
+                model.forgetEverything()
+                // Kinesis has let go; the band has not. Say so while it is the next thing to do.
+                remindingToReset = true
+            }
             Button("cancel", role: .cancel) {}
         } message: {
-            Text("this clears the band, its key, and your meta sign-in from this Mac. the band itself stays claimed. to wipe it completely, factory reset it: \(OwnershipCeremony.factoryResetHint).")
+            Text("this clears the band, its key, and your meta sign-in from this Mac.")
+        }
+        .sheet(isPresented: $remindingToReset) {
+            FactoryResetReminder { remindingToReset = false }
         }
     }
 
@@ -340,6 +348,34 @@ private struct BandSettingsView: View {
                     .disabled(model.busy)
             }
         }
+    }
+}
+
+/// Shown right after a band is forgotten. Forgetting clears the Mac's side only;
+/// the band stays claimed until its own button wipes it.
+struct FactoryResetReminder: View {
+    var done: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HoldArtwork(hint: .prompt).frame(width: 190, height: 150)
+                .frame(maxWidth: .infinity).padding(.bottom, 26)
+            Text("now factory reset the band").font(.system(size: 26)).tracking(-0.9)
+            Text("kinesis forgot it, but the band is still claimed by your meta account. to wipe it, \(OwnershipCeremony.factoryResetHint).")
+                .font(.system(size: 13)).foregroundStyle(KinesisStyle.secondary).lineSpacing(5)
+                .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
+            GuideLink(title: "how to factory reset", url: PairingPresentation.factoryResetGuide).padding(.top, 14)
+            Spacer(minLength: 24)
+            HStack(spacing: 14) {
+                Spacer()
+                Button("not now", action: done).buttonStyle(.plain)
+                    .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                Button("i’ve reset it", action: done).buttonStyle(KinesisButtonStyle(prominent: true))
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(.horizontal, 40).padding(.top, 34).padding(.bottom, 28)
+        .frame(width: 520, height: 470)
+        .background(KinesisStyle.paper).foregroundStyle(KinesisStyle.ink)
     }
 }
 
