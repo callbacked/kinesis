@@ -67,7 +67,7 @@ import Testing
     #expect(timeout.headline == "couldn’t connect" && timeout.detail == "the band took too long to respond. try reconnecting.")
     #expect(timeout.holdHint == .none)
 
-    let wrongAccount = "this band belongs to a different meta account. sign in with that account, or factory reset the band to claim it with this one."
+    let wrongAccount = "this band belongs to a different meta account. sign in with that account, or factory reset the band (hold its button for about 16 seconds) to claim it with this one."
     let refused = PairingPresentation(PairingInput(failure: wrongAccount, failedStep: .claim, hasRememberedBand: true))
     #expect(refused.failed == .claim && refused.completed == [.find, .signIn])
     #expect(refused.headline == "couldn’t claim your band" && refused.detail == wrongAccount)

@@ -310,7 +310,7 @@ private struct BandSettingsView: View {
             Button("forget band", role: .destructive) { model.forgetEverything() }
             Button("cancel", role: .cancel) {}
         } message: {
-            Text("kinesis removes this band, its key, and your meta sign-in from this Mac. the band stays on your meta account, so you can pair it again.")
+            Text("this clears the band, its key, and your meta sign-in from this Mac. the band itself stays claimed. to wipe it completely, factory reset it: \(OwnershipCeremony.factoryResetHint).")
         }
     }
 

@@ -168,11 +168,14 @@ public final class OwnershipCeremony {
     }
 
     /// The reference error map for identity service result codes.
+    /// How to wipe a band completely. Forgetting it in the app clears only the Mac's side.
+    public static let factoryResetHint = "hold its button for about 16 seconds"
+
     public static func failureMessage(_ code: UInt32) -> String {
         switch code {
         case 0x1040: return "the band rejected the ownership receipt."
         case 0x1041: return "the band rejected the ownership challenge."
-        case 0x1042: return "this band belongs to a different meta account. sign in with that account, or factory reset the band to claim it with this one."
+        case 0x1042: return "this band belongs to a different meta account. sign in with that account, or factory reset the band (\(factoryResetHint)) to claim it with this one."
         case 0x1043: return "the band rejected this app's identity."
         case 0x1044: return "the band rejected a signature."
         case 0x1045: return "the band rejected the receipt timing."

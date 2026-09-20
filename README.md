@@ -21,7 +21,7 @@ some things may act quirky or not work at all, if that is the case i would love 
 ## run it
 **be sure to unpair your band from the meta app before you get started**
 
-a [factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) on the band is a good idea too, so it has no old owner
+a [factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) on the band is a good idea too (hold its button for about 16 seconds), so it has no old owner
 
 [download kinesis](https://github.com/callbacked/kinesis/releases/latest), open the dmg, and drag it into applications. needs macos 14+ and a neural band. works on apple silicon and intel.
 

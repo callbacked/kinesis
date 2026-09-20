@@ -1,3 +1,4 @@
+import KinesisCore
 import SwiftUI
 import WebKit
 
@@ -34,7 +35,7 @@ struct MetaLoginView: View {
                 promise("key", "token lives in your keychain",
                         "kinesis uses it to claim your band. forget this band removes it.")
                 promise("arrow.uturn.backward", "your band stays on your account",
-                        "a factory reset on the band undoes all of this.")
+                        "a factory reset undoes all of this: \(OwnershipCeremony.factoryResetHint).")
             }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
                 .background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 16)).padding(.top, 30)
             Spacer(minLength: 0)
