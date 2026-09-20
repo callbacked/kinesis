@@ -31,7 +31,7 @@ set your band in pairing mode, hit pair band, and sign in with meta once. allow 
 
 ## why the meta sign-in
 
-the band only trusts an owner that meta has enrolled. kinesis opens meta's own sign-in page once, claims the band for your mac, and keeps the session token in your keychain. it only gets that token, not your password. forget this band clears the key and the sign-in.
+the band only trusts an owner that meta has enrolled. when the meta ai app sets up a band, it signs in, asks meta's servers for an ownership receipt, and hands that receipt to the band. kinesis runs the same exchange with a key it makes for your mac, so the band ends up trusting kinesis. it opens meta's own sign-in page once and keeps the session token in your keychain. it only gets that token, not your password. once the band is claimed, connecting only needs the key, not meta. forget this band clears the key and the sign-in.
 
 ## build it
 

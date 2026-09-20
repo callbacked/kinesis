@@ -4,9 +4,9 @@ kinesis 0.2 can authenticate as a band's enrolled owner. a p-256 identity key
 stored in the mac keychain signs the band's `enabletrust` proof, so a band that
 is still owned by a meta account unlocks on connect without a factory reset.
 this is the cold-start path verified against hardware in the
-`local/band-recovery-2026-09-16` recovery work. the one-time enrollment
-ceremony itself is planned for a later release; its design is at the end of
-this document.
+`local/band-recovery-2026-09-16` recovery work. kinesis also runs the one-time
+enrollment ceremony itself, the same exchange the meta ai app runs when it
+registers a band; it is described at the end of this document.
 
 ## identity lifecycle
 
@@ -148,12 +148,15 @@ id, device id, universe, obtained-at time); token material never reaches logs.
   draws every pairing state and the sign-in preface to png files, light and
   dark, for a visual check without a band.
 
-## enrollment ceremony (planned)
+## enrollment ceremony
 
 bands require one-time official enrollment: an owner identity must be
-provisioned through meta before any trust proof can succeed. kinesis 0.2
-authenticates with an identity recovered out-of-band; a later release will
-perform the ceremony in-app so no extraction workflow is needed. the field
+provisioned through meta before any trust proof can succeed. the band only
+accepts an owner whose receipt meta's server has signed, and that server only
+signs for a signed-in meta account. that is the whole reason for the sign-in.
+kinesis 0.2 performs the ceremony in-app (`OwnershipCeremony`,
+`MetaPairClient`), with a key it generates for the band, so no extraction
+workflow is needed. the field
 maps below come from the com.meta.identity implementation recovered in the
 meta ai android build; see
 `local/band-recovery-2026-09-16/meta-ai-startup-map.md` for the source
@@ -161,9 +164,10 @@ analysis and
 `local/band-recovery-2026-09-16/phone-home-pairing-dgz958jd/receipt-structure.json`
 for the captured receipt shapes.
 
-1. account login: an `ASWebAuthenticationSession` sign-in flow obtains the
-   user access token (and token universe, `ar` or `fb`) that the graph routes
-   require, together with the public hardware app credential.
+1. account login: a `WKWebView` on meta's own sign-in page (`MetaLoginView`,
+   `MetaAuth`) obtains the user access token (token universe `ar`) that the
+   graph routes require, together with the public hardware app credential.
+   kinesis never sees the password.
 2. device identity read: band types `0x3000` → `0x3001` return the device
    certificate (field 1), serial (field 2), and optional registration challenge
    package (field 3).
@@ -188,5 +192,6 @@ for the captured receipt shapes.
    above.
 
 receipt strings are signed bytes: kinesis must keep them verbatim and must not
-reformat the json. the deployed graph base url and app credential handling
-still need verification against live infrastructure before this ships.
+reformat the json. the routes and the app credentials are meta's own and
+undocumented, so meta can change them; a band that is already enrolled keeps
+working, because connecting only needs the stored key.
