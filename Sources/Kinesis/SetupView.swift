@@ -129,6 +129,8 @@ struct SetupView: View {
                     .disabled(step == 0 ? !model.live : step == 1 ? swipes.isEmpty : step == 2 ? !completedTurn : !model.live || !model.accessibilityAllowed)
             }.padding(.horizontal, 48).padding(.bottom, 32)
         }
+        // A wide window must not pull the columns apart or inflate the artwork.
+        .frame(maxWidth: 1120).frame(maxWidth: .infinity, maxHeight: .infinity)
         .onReceive(model.dialTurns) { delta in
             guard step == 2 else { return }
             let ticks = practiceRouter.turn(delta: delta, sensitivity: model.dialSensitivity,
@@ -176,7 +178,7 @@ struct SetupView: View {
     @ViewBuilder private var artwork: some View {
         if step == 0 {
             VStack(spacing: 20) {
-                BandArtwork().frame(height: 275)
+                BandArtwork().frame(maxWidth: 440).frame(height: 275)
                 VStack(spacing: 10) {
                     Text("which hand is your band on?").font(.system(size: 13, weight: .medium))
                     Picker("Band hand", selection: Binding(get: { model.pendingHand ?? model.bandHand }, set: { model.selectHand($0) })) {

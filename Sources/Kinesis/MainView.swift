@@ -37,7 +37,9 @@ struct MainView: View {
                                 case .band: BandSettingsView(model: model)
                                 }
                                 if let error = model.error { ErrorNote(text: error) }
-                            }.padding(.horizontal, 32).padding(.vertical, 22)
+                            }.frame(maxWidth: 780, alignment: .leading)
+                                .padding(.horizontal, 32).padding(.vertical, 22)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }.scrollIndicators(.hidden).scrollBounceBehavior(.basedOnSize)
                     }
                 }
@@ -278,46 +280,39 @@ private struct BandSettingsView: View {
             }
             if !model.selectedAddress.isEmpty {
                 bandCard
-                VStack(alignment: .leading, spacing: 18) {
-                    controlsRow
-                    Rectangle().fill(KinesisStyle.line).frame(height: 1)
-                    HStack {
-                        Text("band hand").font(.system(size: 13, weight: .medium))
-                        Spacer()
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingRow(title: "band hand", detail: model.handSettingStatus) {
                         Picker("Band hand", selection: Binding(get: { model.pendingHand ?? model.bandHand }, set: { model.selectHand($0) })) {
                             ForEach(BandHand.allCases) { hand in Text(hand.rawValue).tag(hand) }
                         }.pickerStyle(.segmented).labelsHidden().frame(width: 150)
-                        .disabled(!model.canChangeHand)
+                            .disabled(!model.canChangeHand)
                     }
-                    Text(model.handSettingStatus)
-                        .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
                     Rectangle().fill(KinesisStyle.line).frame(height: 1)
-                    Toggle(isOn: $model.startsAutomatically) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("start automatically").font(.system(size: 13, weight: .medium))
-                            Text("connect your band and enable controls when kinesis opens.")
-                                .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
-                        }
-                    }.toggleStyle(.switch).controlSize(.small).tint(KinesisStyle.blue)
-                }.padding(18).background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                    SettingRow(title: "start automatically",
+                               detail: "connect your band and enable controls when kinesis opens.") {
+                        Toggle("Start automatically", isOn: $model.startsAutomatically)
+                            .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(KinesisStyle.blue)
+                    }
+                }.padding(.horizontal, 18).background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 14))
                 PermissionCard(model: model)
-                HStack(alignment: .center) {
-                    Text("clears the remembered band, its stored identity, and the saved meta sign-in.")
-                        .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
-                    Spacer()
-                    Button("forget band") { confirmingForget = true }
-                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
-                        .help("clears the remembered band, its stored identity, and the saved meta sign-in.")
-                }
             }
-            Text("the connection stays on this Mac. no glasses or phone needed.")
-                .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                Text("the connection stays on this Mac. no glasses or phone needed.")
+                Spacer(minLength: 16)
+                if !model.selectedAddress.isEmpty {
+                    Button("forget this band…") { confirmingForget = true }.buttonStyle(.plain)
+                        .help("removes this band and its key from kinesis.")
+                }
+            }.font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
         }
         .confirmationDialog("forget this band?", isPresented: $confirmingForget, titleVisibility: .visible) {
-            Button("forget band", role: .destructive) { model.forgetEverything() }
+            Button("forget band", role: .destructive) { model.forgetEverything(keepMetaSession: true) }
+            if model.hasSavedMetaSession {
+                Button("forget band and sign out of meta", role: .destructive) { model.forgetEverything() }
+            }
             Button("cancel", role: .cancel) {}
         } message: {
-            Text("kinesis will forget this band and sign you out of meta. the band stays enrolled to your account.")
+            Text("kinesis removes this band and its key from this Mac. the band stays claimed by your meta account, so you can pair it again.")
         }
     }
 
@@ -328,33 +323,39 @@ private struct BandSettingsView: View {
                 Text(model.bandName.lowercased()).font(.system(size: 21)).tracking(-0.5)
                 ConnectionBadge(live: model.live, text: model.phase)
                 if let battery = model.battery {
-                    Text("\(battery)% battery").font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                    Text("\(battery)% battery" + (model.live ? "" : " when last connected"))
+                        .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
                 }
             }
-            Spacer()
+            Spacer(minLength: 12)
             if model.live || model.wantsConnection {
-                Button("disconnect") { model.disconnect() }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                Button("disconnect") { model.disconnect() }.buttonStyle(KinesisButtonStyle())
                     .disabled(model.busy && !model.wantsConnection)
-                    .help("stops using the band until kinesis reconnects.")
+                    .help("stops using the band until you connect again.")
+            } else if !model.showsPairAction {
+                // A paired band that was disconnected by hand needs a way back.
+                Button("connect") { model.connect() }.buttonStyle(KinesisButtonStyle(prominent: true))
+                    .disabled(model.busy)
             }
         }
     }
+}
 
-    private var controlsRow: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("enable controls").font(.system(size: 13, weight: .medium))
-                Text(model.controlsEnabled ? "your gestures send their shortcuts." : "gestures stay silent until you turn this on.")
-                    .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+/// One settings line: what it is on the left, its control at the right edge.
+struct SettingRow<Control: View>: View {
+    let title: String
+    let detail: String
+    @ViewBuilder var control: Control
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.system(size: 13, weight: .medium))
+                Text(detail).font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            Toggle("Enable controls", isOn: Binding(
-                get: { model.controlsEnabled },
-                set: { $0 ? model.toggleControls() : model.pause() }))
-            .toggleStyle(.switch).controlSize(.small).tint(KinesisStyle.blue)
-            .disabled(!model.live && !model.controlsEnabled)
-        }
+            Spacer(minLength: 0)
+            control
+        }.padding(.vertical, 16)
     }
 }
 

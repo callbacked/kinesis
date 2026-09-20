@@ -280,16 +280,18 @@ final class BandModel: ObservableObject {
     /// The band page's low-emphasis reset: one confirmed step clears the
     /// remembered band, its stored identity, and the Meta session. The band
     /// stays enrolled server-side; pairing again rebinds it.
-    func forgetEverything() {
+    func forgetEverything(keepMetaSession: Bool = false) {
         cancelEnrollment()
         let address = selectedAddress
         if !address.isEmpty { forgetBand() }
         BandIdentity.delete(for: address)
-        sessionStore.deleteSession()
-        hasSavedMetaSession = false
+        if !keepMetaSession {
+            sessionStore.deleteSession()
+            hasSavedMetaSession = false
+        }
         pairFailure = nil
         emptyScans = 0
-        connectionLog.notice("Forgot the band, its identity, and the Meta session")
+        connectionLog.notice("Forgot the band and its identity; Meta session kept: \(keepMetaSession, privacy: .public)")
     }
 
     /// The privacy escape hatch beside the pairing progress: drops the saved

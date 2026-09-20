@@ -935,6 +935,50 @@ private struct FakePairClient: BandPairClient {
     await model.shutdown()
 }
 
+@Test @MainActor func forgettingTheBandCanKeepTheMetaSignIn() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let band = "test-\(UUID().uuidString)"
+    defer { BandIdentity.delete(for: band) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
+    try BandIdentity.generate(for: band)
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "token", userID: "1")
+    let model = BandModel(defaults: defaults, connection: RecordedConnection(), controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    model.forgetEverything(keepMetaSession: true)
+    #expect(model.selectedAddress.isEmpty && !BandIdentity.exists(for: band))
+    // Pairing again must not need another sign-in.
+    #expect(model.hasSavedMetaSession && store.saved != nil)
+    await model.shutdown()
+}
+
+@Test @MainActor func aPairedBandDisconnectedByHandCanConnectAgain() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let band = "test-\(UUID().uuidString)"
+    defer { BandIdentity.delete(for: band) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
+    try BandIdentity.generate(for: band)
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    try await waitUntil { model.live }
+    model.disconnect()
+    try await waitUntil { !model.busy }
+    // The band page shows its connect button exactly in this state: a paired
+    // band, nothing in flight, and no pairing surface.
+    #expect(!model.live && !model.wantsConnection && !model.showsPairAction && model.hasBandIdentity)
+    model.connect()
+    #expect(connection.requests == ["connect \(band)", "connect \(band)"] && model.wantsConnection)
+    await model.shutdown()
+}
+
 @Test @MainActor func forgetEverythingClearsTheBandIdentitySessionAndRememberedBand() async throws {
     let suite = "kinesis-tests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))
