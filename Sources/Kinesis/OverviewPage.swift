@@ -6,8 +6,10 @@ import KinesisCore
 /// what every gesture will do.
 struct OverviewPage: View {
     @ObservedObject var model: BandModel
-    @State private var dialRouter = DialRouter()
-    @State private var dialAngle = 0.0
+    /// Degrees the wrist has turned since the pinch began, as the band's gyro estimates them.
+    @State private var wristTurn = 0.0
+    /// The light on the ring travels further than the wrist, so a small turn is easy to see.
+    private static let ringGain = 2.5
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -20,14 +22,13 @@ struct OverviewPage: View {
                 .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.8)).reveal(3)
         }
         .onReceive(model.dialTurns) { delta in
-            let ticks = dialRouter.turn(delta: delta, sensitivity: model.dialSensitivity,
-                                        now: ProcessInfo.processInfo.systemUptime)
-            guard ticks != 0 else { return }
-            withAnimation(.easeOut(duration: 0.1)) { dialAngle = max(-150, min(150, dialAngle + Double(ticks) * 7.5)) }
+            // The mirror follows the wrist itself, not the steps sent to the Mac. Those are
+            // rate limited, and a quick turn would hardly move the light at all.
+            guard delta.isFinite else { return }
+            withAnimation(.easeOut(duration: 0.08)) { wristTurn = max(-60, min(60, wristTurn + delta)) }
         }
         .onChange(of: model.dialEngaged) { _, engaged in
-            dialRouter.reset()
-            if engaged { dialAngle = 0 }
+            if engaged { wristTurn = 0 }
         }
     }
 
@@ -39,7 +40,7 @@ struct OverviewPage: View {
                 // The electrodes sit on top of the hand's view, so its square never hides them.
                 HandView(scene: HandSceneView(hand: model.bandHand, highlight: handHighlight, gesture: model.recognizedGesture,
                                               revision: model.gestureCount, sustained: model.pinchedFinger != nil || model.dialEngaged,
-                                              roll: model.dialEngaged ? dialAngle * 0.55 : 0))
+                                              roll: model.dialEngaged ? wristTurn : 0))
                     .frame(width: 350, height: 350)
                     // The hand's own pool of light on the field.
                     .background {
@@ -48,7 +49,7 @@ struct OverviewPage: View {
                             .padding(-15).opacity(scheme == .dark ? 1 : 0)
                     }
                     .overlay {
-                        ElectrodeRing(angle: dialAngle, engaged: model.dialEngaged && model.live ? 1 : 0)
+                        ElectrodeRing(angle: wristTurn * Self.ringGain, engaged: model.dialEngaged && model.live ? 1 : 0)
                             .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.dialEngaged)
                             .allowsHitTesting(false)
                     }
