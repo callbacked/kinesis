@@ -49,7 +49,9 @@ struct PairingPresentation: Equatable {
     let holdHint: HoldHint
     /// 0...4 while the claim runs, for its four quiet ticks.
     let claimProgress: Int?
-    let offersAccountSwitch: Bool
+    /// Only the wrong-account failure can be fixed by another sign-in. A claimed band is
+    /// locked to its account, so switching anywhere else would walk into that failure.
+    let offersOtherAccount: Bool
     let needsSystemPairing: Bool
     /// A guide worth opening for this failure, such as Meta's factory reset steps.
     let help: Help?
@@ -79,7 +81,7 @@ struct PairingPresentation: Equatable {
         needsSystemPairing = working && input.awaitingSystemPairing
         bandName = input.hasRememberedBand ? input.bandName : nil
         dimsArtwork = !working
-        offersAccountSwitch = input.route == .enrolling && input.hasSavedSession
+        offersOtherAccount = current == nil && input.failure?.contains("different meta account") == true
         buttonEnabled = input.canPair && !working
 
         var claim: Int?

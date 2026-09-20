@@ -149,7 +149,7 @@ private let finalReceipt = #"{"receipt_type":"ServerFinalOwnershipReceipt"}"#
     _ = try ceremony.skipChallenge(payload: skipChallengeResponsePayload(nonce))
     _ = try ceremony.pairRequestCompleted(signature: pendingSignature, receipt: pendingReceipt)
     // Identity result codes map onto the reference error strings.
-    #expect(OwnershipCeremony.failureMessage(0x1042) == "this band belongs to a different meta account. factory reset the band (hold the button ~16 seconds), then pair again to claim it with this account.")
+    #expect(OwnershipCeremony.failureMessage(0x1042) == "this band belongs to a different meta account. sign in with that account, or factory reset the band to claim it with this one.")
     #expect(OwnershipCeremony.failureMessage(0x1044).contains("signature"))
 }
 

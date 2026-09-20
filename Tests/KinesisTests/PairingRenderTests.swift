@@ -16,7 +16,7 @@ import Testing
         ("claiming", PairingInput(route: .enrolling, stage: .working("confirming ownership"), hasRememberedBand: true, hasSavedSession: true, canPair: false)),
         ("settling", PairingInput(route: .connecting, hasRememberedBand: true, claimedThisRun: true, canPair: false)),
         ("no band found", PairingInput(failure: "no band found. put the band in pairing mode and pair again.", failedStep: .find, emptyScans: 2)),
-        ("claim refused", PairingInput(failure: "this band belongs to a different meta account. factory reset the band (hold the button ~16 seconds), then pair again to claim it with this account.", failedStep: .claim, hasRememberedBand: true)),
+        ("claim refused", PairingInput(failure: "this band belongs to a different meta account. sign in with that account, or factory reset the band to claim it with this one.", failedStep: .claim, hasRememberedBand: true)),
         ("setup incomplete, after bailing out of the sign-in", PairingInput(hasRememberedBand: true, bandName: "Meta Band 00BC")),
         ("pair it again", PairingInput(hasRememberedBand: true, bandName: "Meta Band 00BC", identityRejected: true)),
     ]

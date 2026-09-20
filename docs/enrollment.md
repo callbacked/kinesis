@@ -97,9 +97,14 @@ id, device id, universe, obtained-at time); token material never reaches logs.
   and the sheet asks for one sign-in. the ceremony restarts from its identity
   read; its state machine lived in the closed connection, so a mid-ceremony
   resume is not possible. the band must stay in pairing mode.
-- "use a different account" sits next to the pairing progress while a saved
-  session is driving a claim. it drops only the session (`switchMetaAccount`),
-  so the band binds to whichever account signs in next.
+- the requirement is a meta account for the first claim. after that the band
+  is locked to that account, and unenrolling is not mapped, so another account
+  needs a factory reset. the surface therefore offers an account switch in one
+  place only: the wrong-account failure (`0x1042`), where the band is owned by
+  another of the person's accounts and signing in with it is the cheap fix.
+  "sign in with another account" drops the refused session
+  (`switchMetaAccount`) and pairs again, which opens the sign-in sheet. the
+  factory reset guide sits beside it.
 - "forget this band" is one confirmed step (`forgetEverything`): it clears the
   remembered band, the stored identity, and the meta session. the session only
   exists to claim a band, so it has no control of its own. the band stays

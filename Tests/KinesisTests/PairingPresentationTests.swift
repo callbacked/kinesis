@@ -26,12 +26,13 @@ import Testing
     #expect(connecting.current == .find && connecting.headline == "connecting to your band" && connecting.holdHint == .none)
 
     let signIn = PairingPresentation(PairingInput(route: .enrolling, stage: .login, canPair: false))
-    #expect(signIn.current == .signIn && signIn.completed == [.find] && !signIn.offersAccountSwitch)
+    #expect(signIn.current == .signIn && signIn.completed == [.find] && !signIn.offersOtherAccount)
 
     let claim = PairingPresentation(PairingInput(route: .enrolling, stage: .working("confirming ownership"),
                                                  hasSavedSession: true, canPair: false))
     #expect(claim.current == .claim && claim.completed == [.find, .signIn])
-    #expect(claim.claimProgress == 3 && claim.detail == "confirming with the band." && claim.offersAccountSwitch)
+    // A claimed band is locked to its account, so a running claim offers no switch.
+    #expect(claim.claimProgress == 3 && claim.detail == "confirming with the band." && !claim.offersOtherAccount)
     // The ceremony connection is up before the session reports its first stage.
     #expect(PairingPresentation(PairingInput(route: .enrolling, stage: .pairing)).claimProgress == 0)
 
@@ -66,11 +67,13 @@ import Testing
     #expect(timeout.headline == "couldn’t connect" && timeout.detail == "the band took too long to respond. try reconnecting.")
     #expect(timeout.holdHint == .none)
 
-    let wrongAccount = "this band belongs to a different meta account. factory reset the band (hold the button ~16 seconds), then pair again to claim it with this account."
+    let wrongAccount = "this band belongs to a different meta account. sign in with that account, or factory reset the band to claim it with this one."
     let refused = PairingPresentation(PairingInput(failure: wrongAccount, failedStep: .claim, hasRememberedBand: true))
     #expect(refused.failed == .claim && refused.completed == [.find, .signIn])
     #expect(refused.headline == "couldn’t claim your band" && refused.detail == wrongAccount)
-    #expect(refused.help?.url == PairingPresentation.factoryResetGuide)
+    // The one failure another sign-in can fix, next to the expensive way out.
+    #expect(refused.help?.url == PairingPresentation.factoryResetGuide && refused.offersOtherAccount)
+    #expect(!timeout.offersOtherAccount && !missing.offersOtherAccount)
 
     // A failure with no recorded stage still marks one, so the stepper never looks idle.
     #expect(PairingPresentation(PairingInput(failure: "x")).failed == .find)

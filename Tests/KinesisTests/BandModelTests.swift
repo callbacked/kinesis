@@ -948,7 +948,7 @@ private struct FakePairClient: BandPairClient {
                           pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
     #expect(model.pairing.headline == "setup incomplete" && model.pairing.current == nil)
     model.pairBand()
-    #expect(model.pairing.current == .claim && model.pairing.claimProgress == 0 && model.pairing.offersAccountSwitch)
+    #expect(model.pairing.current == .claim && model.pairing.claimProgress == 0 && !model.pairing.offersOtherAccount)
     // macOS asks to pair before the band answers anything.
     connection.send(.systemPairingPending)
     #expect(model.awaitingSystemPairing && model.pairing.needsSystemPairing)
@@ -990,7 +990,13 @@ private struct FakePairClient: BandPairClient {
     connection.finish(error: KinesisError(message: OwnershipCeremony.failureMessage(0x1042)))
     try await waitUntil { !model.pairInProgress }
     #expect(model.pairFailedStep == .claim && model.pairing.headline == "couldn’t claim your band")
-    #expect(model.pairing.help?.url == PairingPresentation.factoryResetGuide)
+    #expect(model.pairing.help?.url == PairingPresentation.factoryResetGuide && model.pairing.offersOtherAccount)
+    // Another account means a fresh sign-in: the refused one is dropped and the sheet opens.
+    model.switchMetaAccount()
+    model.pairBand()
+    #expect(!model.hasSavedMetaSession && store.saved == nil && model.enrollmentStage == .login)
+    #expect(model.pairing.current == .signIn && model.pairFailure == nil)
+    model.cancelEnrollment()
     await model.shutdown()
 }
 

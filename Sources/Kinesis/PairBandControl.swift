@@ -9,7 +9,11 @@ struct PairBandControl: View {
     var body: some View {
         PairingFlowView(state: model.pairing, compact: compact,
                         pair: { model.pairBand() }, cancel: { model.cancelPairing() },
-                        switchAccount: { model.switchMetaAccount() })
+                        switchAccount: {
+                            // Drop the sign-in that the band refused, then run again: the sheet opens.
+                            model.switchMetaAccount()
+                            model.pairBand()
+                        })
             .sheet(isPresented: Binding(get: { model.enrollmentStage == .login },
                                         set: { if !$0 { model.cancelEnrollment() } })) {
                 MetaLoginView(onSession: { model.enroll(session: $0) },
@@ -75,10 +79,10 @@ struct PairingFlowView: View {
                         }.font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
                     }
                     Spacer(minLength: 0)
-                    if state.offersAccountSwitch {
-                        Button("use a different account", action: switchAccount).buttonStyle(.plain)
+                    if state.offersOtherAccount {
+                        Button("sign in with another account", action: switchAccount).buttonStyle(.plain)
                             .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
-                            .help("signs out of meta so the band can belong to another account.")
+                            .help("signs out, then pairs again so you can use the account that owns this band.")
                     }
                 }.padding(.top, 20)
             }.frame(maxWidth: .infinity, alignment: .leading)

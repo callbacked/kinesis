@@ -172,7 +172,7 @@ public final class OwnershipCeremony {
         switch code {
         case 0x1040: return "the band rejected the ownership receipt."
         case 0x1041: return "the band rejected the ownership challenge."
-        case 0x1042: return "this band belongs to a different meta account. factory reset the band (hold the button ~16 seconds), then pair again to claim it with this account."
+        case 0x1042: return "this band belongs to a different meta account. sign in with that account, or factory reset the band to claim it with this one."
         case 0x1043: return "the band rejected this app's identity."
         case 0x1044: return "the band rejected a signature."
         case 0x1045: return "the band rejected the receipt timing."
