@@ -1,8 +1,8 @@
 # kinesis 0.2.0
 
-you can now pair your band from kinesis. put it in pairing mode, hit pair band, and sign in with meta once. kinesis claims the band for your mac, so you don't need the meta app or the glasses for it.
+you can now (properly) pair your band from kinesis. put it in pairing mode, hit pair band, and sign in with meta once. kinesis claims the band for your mac, so you don't need the meta app or the glasses for it.
 
-why the meta sign-in: the band only trusts an owner that meta's servers have signed off on. when the meta ai app sets up a band, it signs in, asks meta for an ownership receipt, and hands that receipt to the band. kinesis runs the same exchange with a key it makes for your mac. it only gets a session token, never your password, and the token stays in your keychain. once the band is claimed, connecting only needs the key, not meta.
+why the meta sign-in: the band only works with an owner that meta has enrolled. the meta ai app does that enrollment when you set up a band, and kinesis does the same enrollment for your mac. it only gets a session token, never your password, and the token stays in your keychain. once the band is enrolled, connecting doesn't need meta.
 
 the ui got a new look.
 
