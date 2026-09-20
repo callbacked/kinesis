@@ -176,30 +176,3 @@ private struct ClaimTicks: View {
         .accessibilityLabel("Claim step \(max(progress, 1)) of 4")
     }
 }
-
-/// The band, with its button called out while the person has to hold it.
-struct HoldArtwork: View {
-    let hint: PairingPresentation.HoldHint
-    var body: some View {
-        BandArtwork()
-            .overlay {
-                GeometryReader { geometry in
-                    // The button sits on the capsule under the top arc of the product image.
-                    let center = CGPoint(x: geometry.size.width * 0.5, y: geometry.size.height * 0.25)
-                    ZStack {
-                        Pulse(active: hint != .none) { beat in
-                            Circle().stroke(KinesisStyle.accent.opacity(0.85), lineWidth: 1.5)
-                                .frame(width: 26, height: 26)
-                                .scaleEffect(0.7 + 1.4 * beat).opacity(1 - beat)
-                        }
-                        Circle().fill(KinesisStyle.accent).frame(width: 7, height: 7)
-                            .shadow(color: KinesisStyle.accent.opacity(0.9), radius: 6)
-                    }
-                    .position(center)
-                    .opacity(hint == .none ? 0 : 1)
-                    .animation(KinesisMotion.settle, value: hint == .none)
-                }
-            }
-            .accessibilityLabel(hint == .none ? "Meta Neural Band" : "Hold the button on the band")
-    }
-}

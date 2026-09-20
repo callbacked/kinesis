@@ -190,7 +190,7 @@ struct SetupView: View {
                 Circle().fill(RadialGradient(colors: [KinesisStyle.accent.opacity(model.live ? 0.16 : 0.07), .clear],
                                              center: .center, startRadius: 10, endRadius: 210))
                     .frame(width: 420, height: 420)
-                HoldArtwork(hint: model.pairing.holdHint).frame(width: 400, height: 262)
+                BandArtwork().frame(width: 400, height: 262)
                     .saturation(model.live || model.pairInProgress ? 1 : 0.3)
                     .opacity(model.live || model.pairInProgress ? 1 : 0.75)
             }.animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: model.live || model.pairInProgress)

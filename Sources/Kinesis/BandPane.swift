@@ -92,7 +92,7 @@ struct BandPane: View {
             Ellipse().fill(.black.opacity(scheme == .dark ? 0.55 : 0.22))
                 .frame(width: 124, height: 10).blur(radius: 11).offset(y: 76)
                 .opacity(unpaired ? 0.4 : 1)
-            HoldArtwork(hint: model.pairing.holdHint).frame(width: 196, height: 150)
+            BandArtwork().frame(width: 196, height: 150)
                 .saturation(unpaired ? 0 : 1)
                 .opacity(unpaired ? 0.42 : model.live ? 1 : 0.8)
         }

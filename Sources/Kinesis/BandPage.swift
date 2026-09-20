@@ -89,7 +89,7 @@ struct FactoryResetReminder: View {
     var done: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HoldArtwork(hint: .prompt).frame(width: 190, height: 150)
+            BandArtwork().frame(width: 190, height: 150)
                 .frame(maxWidth: .infinity).padding(.bottom, 26)
             Text("now factory reset the band").font(.system(size: 26)).tracking(-0.9)
             Text("kinesis forgot it, but the band is still claimed by your meta account. to wipe it, \(OwnershipCeremony.factoryResetHint).")
