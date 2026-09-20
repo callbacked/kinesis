@@ -55,7 +55,12 @@ struct SetupView: View {
                         .font(.system(size: 14)).foregroundStyle(KinesisStyle.secondary).lineSpacing(5)
                     Group {
                         if step == 0 {
-                            ConnectionControls(model: model)
+                            // First run pairs with the same one button: the
+                            // pipeline scans, connects, and claims when the
+                            // band needs it. It hides once the band streams.
+                            if !model.live {
+                                PairBandControl(model: model)
+                            }
                             ConnectionBadge(live: model.live, text: model.phase)
                         } else if step == 1 {
                             HStack(spacing: 10) {

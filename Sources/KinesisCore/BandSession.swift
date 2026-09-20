@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSLog
 import Security
 
 /// The observed band handshake and input subscription. It never exports session keys.
@@ -11,6 +12,7 @@ public final class BandSession {
     private let base: UInt32
     private var peerKey: Data?
     private var peerChallenge: Data?
+    private var peerSeed: Data?
     private var pending = Data()
     private var transmitter: AirShieldCipher?
     private var receiver: AirShieldReceiver?
@@ -31,6 +33,13 @@ public final class BandSession {
     private let streamFields = [3, 6, 8]
     private let streamChannel: UInt16 = 0x8005
     private let configurationChannel: UInt16 = 0x8006
+    private enum SetupStage { case link, ceremony, identity, deviceInfo, input }
+    private var setupStage = SetupStage.link
+    private var enrollment: BandEnrollmentIdentity?
+    private let ceremony: OwnershipCeremony?
+    private var appTrusted = false
+    private var bandTrusted = false
+    private var endLinkSent = false
     private var configurationID: UInt64 = 0
     private struct HandRequest {
         let id: UInt64
@@ -40,8 +49,12 @@ public final class BandSession {
     }
     private var handRequest: HandRequest?
     public private(set) var hand: BandHand?
+    private let log = Logger(subsystem: "local.callbacked.kinesis", category: "protocol")
+    private var startupFrames = 0
 
-    public init() throws {
+    public init(enrollment: BandEnrollmentIdentity? = nil, ceremony: OwnershipCeremony? = nil) throws {
+        self.enrollment = enrollment
+        self.ceremony = ceremony
         privateKey = P256.KeyAgreement.PrivateKey()
         challenge = try Self.random(16)
         seed = try Self.random(32)
@@ -97,20 +110,28 @@ public final class BandSession {
                 }
                 let secret = try privateKey.sharedSecretFromKeyAgreement(with: peer).withUnsafeBytes { Data($0) }
                 let peerSeed = try fields.bytes(2, count: 32)
+                self.peerSeed = peerSeed
                 let peerIV = try fields.bytes(3, count: 16)
                 let peerBase = try fields.integer(4)
                 guard let peerCounter = UInt32(exactly: peerBase) else { throw BandProtocolError("Invalid band packet counter") }
                 transmitter = AirShieldCipher(keys: try AirShieldKeys(secret: secret, challenge: peerChallenge, seed: seed), iv: iv, counter: base)
                 receiver = AirShieldReceiver(cipher: AirShieldCipher(keys: try AirShieldKeys(secret: secret, challenge: challenge, seed: peerSeed), iv: peerIV, counter: peerCounter))
-                // Empty identity query and EndLinkSetup are required by the observed firmware.
-                outgoing.append(try encrypt(BandWire.frame(channel: 0x8002, words: [0x81000024, 0x02003000])))
-                outgoing.append(try encrypt(BandWire.frame(channel: 0x8001, words: [0x02001000], payload:
-                    BandWire.field(1, 1) + BandWire.field(2, Self.random(16)))))
-                outgoing.append(try encrypt(BandWire.frame(channel: 0x8003, words: [0x8100ce56, 0x02000314], payload:
-                    BandWire.field(1, 1) + BandWire.field(3, Data()))))
-                outgoing.append(try streamRequest(id: 2, enabled: nil))
-                outgoing.append(try streamRequest(id: 3, enabled: true))
-                outgoing.append(try requestHand(nil, reading: true, at: time))
+                if let ceremony {
+                    // Enrollment startup runs the ownership ceremony instead of
+                    // the identity queries; it rejoins the enrolled flow at trust.
+                    setupStage = .ceremony
+                    outgoing.append(try encrypt(try ceremony.start()))
+                } else if let enrollment {
+                    // Enrolled startup replaces the empty identity query with an
+                    // EnableTrust proof. Link setup waits for mutual trust.
+                    setupStage = .identity
+                    outgoing.append(try encrypt(try enableTrust(enrollment)))
+                } else {
+                    // Complete link setup before opening the input service.
+                    outgoing.append(try encrypt(BandWire.frame(channel: 0x8002, words: [0x81000024, 0x02003000])))
+                    outgoing.append(try encrypt(BandWire.frame(channel: 0x8001, words: [0x02001000], payload:
+                        BandWire.field(1, 1) + BandWire.field(2, Self.random(16)))))
+                }
             default: throw BandProtocolError("Unrecognized band setup message")
             }
         }
@@ -206,13 +227,132 @@ public final class BandSession {
         guard !stopping else { return Data() }
         stopping = true
         handRequest = nil
-        guard transmitter != nil else { return Data() }
+        guard transmitter != nil, setupStage == .input else { return Data() }
         return try streamRequest(id: 4, enabled: false)
     }
 
     private func encrypt(_ data: Data) throws -> Data {
         guard transmitter != nil else { throw BandProtocolError("Band encryption is not ready") }
         return try transmitter!.encrypt(data)
+    }
+
+    /// The confirmed transcript digest:
+    /// SHA256(SHA256(receiver challenge || receiver key) || SHA256(sender seed || sender key)).
+    private static func trustDigest(challenge: Data, receiver: Data, seed: Data, sender: Data) -> SHA256Digest {
+        SHA256.hash(data: Data(SHA256.hash(data: challenge + receiver)) + Data(SHA256.hash(data: seed + sender)))
+    }
+
+    /// Host EnableTrust on the identity service channel, replacing the empty
+    /// identity query for enrolled bands. The service-open word is only needed
+    /// before the first identity exchange on the channel.
+    private func enableTrust(_ identity: BandEnrollmentIdentity, serviceOpen: Bool = false) throws -> Data {
+        guard let peerKey, let peerChallenge else { throw BandProtocolError("Band encryption is not ready") }
+        let digest = Self.trustDigest(challenge: peerChallenge, receiver: peerKey, seed: seed, sender: publicKey)
+        let signature = try identity.privateKey.signature(for: digest).rawRepresentation
+        let identityPoint = Data(identity.privateKey.publicKey.x963Representation.dropFirst())
+        return try BandWire.frame(channel: 0x8002, words: serviceOpen ? [0x02001000] : [0x81000024, 0x02001000],
+            payload: BandWire.field(1, Data(SHA256.hash(data: identityPoint))) + BandWire.field(2, signature))
+    }
+
+    /// Drive one ownership ceremony response. HTTP steps pause the wire flow
+    /// and surface a ceremony event; the app resumes the session with the
+    /// server's reply.
+    private func receiveCeremony(_ frame: DataXFrame, at time: Double, outgoing: inout Data) throws -> [BandEvent] {
+        guard let ceremony, let kind = frame.words.last else { return [] }
+        if kind & 0xff000000 == 0x03000000 {
+            throw BandProtocolError(OwnershipCeremony.failureMessage(kind & 0xffffff))
+        }
+        switch kind {
+        case 0x02003001:
+            outgoing.append(try encrypt(try ceremony.identityRead(payload: frame.payload)))
+            return [BandEvent(.ceremonyStage("reading the band identity"), at: time)]
+        case 0x02002001:
+            let request = try ceremony.skipChallenge(payload: frame.payload)
+            return [BandEvent(.ceremonyStage("claiming the band"), at: time),
+                    BandEvent(.ceremonyHTTP(.pairRequest(request)), at: time)]
+        case 0x02002003:
+            let pair = try ceremony.startChangeOwner(payload: frame.payload)
+            return [BandEvent(.ceremonyStage("confirming ownership"), at: time),
+                    BandEvent(.ceremonyHTTP(.pair(pair)), at: time)]
+        case 0x02002005:
+            return [try adoptEnrolledIdentity(ceremony.complete(words: frame.words, payload: frame.payload),
+                                              outgoing: &outgoing, at: time)]
+        default: return []
+        }
+    }
+
+    /// Swap the just-enrolled identity in and open the enrolled trust flow on
+    /// the same channel; the identity service is already open there.
+    private func adoptEnrolledIdentity(_ identity: BandEnrollmentIdentity, outgoing: inout Data,
+                                       at time: Double) throws -> BandEvent {
+        guard ceremony != nil else { throw BandProtocolError("No enrollment is running") }
+        self.enrollment = identity
+        appTrusted = false
+        bandTrusted = false
+        endLinkSent = false
+        setupStage = .identity
+        outgoing.append(try encrypt(try enableTrust(identity, serviceOpen: true)))
+        return BandEvent(.ceremonyStage("establishing trust"), at: time)
+    }
+
+    /// Resume the ceremony after the `pair_request` HTTP exchange.
+    public func ceremonyPairRequestCompleted(signature: Data, receipt: String) throws -> Data {
+        guard let ceremony else { throw BandProtocolError("No enrollment is running") }
+        return try encrypt(try ceremony.pairRequestCompleted(signature: signature, receipt: receipt))
+    }
+
+    /// Resume the ceremony after the `pair` HTTP exchange.
+    public func ceremonyPairCompleted(signature: Data, receipt: String, devicePublicKey: Data?) throws -> Data {
+        guard let ceremony else { throw BandProtocolError("No enrollment is running") }
+        return try encrypt(try ceremony.pairCompleted(signature: signature, receipt: receipt, devicePublicKey: devicePublicKey))
+    }
+
+    /// Handle the enrolled identity exchange until both directions trust each
+    /// other, then rejoin the shared EndLinkSetup flow.
+    private func receiveIdentity(_ frame: DataXFrame, outgoing: inout Data) throws -> [BandEvent] {
+        guard let kind = frame.words.last else { return [] }
+        if kind & 0xff000000 == 0x03000000, frame.channel == 2 {
+            guard kind == 0x03001000 else {
+                if kind == 0x03001043 {
+                    throw BandIdentityMismatchError(
+                        "band enrolled to a different key. forget the stored band identity to reconnect without it.")
+                }
+                throw BandIdentityMismatchError(
+                    "the band rejected the stored identity (\(String(kind, radix: 16))). try reconnecting.")
+            }
+            appTrusted = true
+        } else if kind == 0x02001001, frame.channel & 0x8000 != 0 {
+            guard !bandTrusted else { throw BandProtocolError("The band sent a duplicate identity proof") }
+            let fields = try ProtoFields(frame.payload)
+            guard let peerKey, let peerSeed else { throw BandProtocolError("Band encryption is not ready") }
+            let signature = try fields.bytes(2, count: 64)
+            if let bandKey = enrollment?.bandPublicKey {
+                guard let proof = try? P256.Signing.ECDSASignature(rawRepresentation: signature),
+                      bandKey.isValidSignature(proof, for:
+                        Self.trustDigest(challenge: challenge, receiver: publicKey, seed: peerSeed, sender: peerKey)) else {
+                    throw BandProtocolError("The band's identity proof didn't verify. Try reconnecting.")
+                }
+            }
+            bandTrusted = true
+            outgoing.append(try encrypt(BandWire.frame(channel: frame.channel & 0x7fff, words: [0x03001000])))
+        } else if kind == 0x02001000, frame.channel == 0x8001, endLinkSent {
+            let fields = try ProtoFields(frame.payload)
+            guard try fields.requiredInteger(1) == 1, try fields.bytes(2).count == 16 else {
+                throw BandProtocolError("Unexpected band link setup response")
+            }
+            setupStage = .deviceInfo
+            outgoing.append(try encrypt(BandWire.frame(channel: 0x8003, words: [0x8100ce56, 0x02000314], payload:
+                BandWire.field(1, 1) + BandWire.field(3, Data()))))
+            return []
+        } else {
+            return []
+        }
+        if appTrusted, bandTrusted, !endLinkSent {
+            endLinkSent = true
+            outgoing.append(try encrypt(BandWire.frame(channel: 0x8001, words: [0x02001000], payload:
+                BandWire.field(1, 1) + BandWire.field(2, Self.random(16)))))
+        }
+        return []
     }
 
     private func streamRequest(id: UInt64, enabled: Bool?) throws -> Data {
@@ -237,24 +377,72 @@ public final class BandSession {
             channelTypes[frame.channel] = kind
         }
         guard let kind = channelTypes[frame.channel] else { return [] }
+        if !streaming, startupFrames < 16 {
+            startupFrames += 1
+            log.info("Band startup response: channel \(frame.channel, privacy: .public), type \(String(kind, radix: 16), privacy: .public), payload bytes \(frame.payload.count, privacy: .public)")
+        }
+        if ceremony != nil, setupStage == .ceremony, !stopping {
+            return try receiveCeremony(frame, at: time, outgoing: &outgoing)
+        }
+        if enrollment != nil, setupStage == .identity, !stopping {
+            return try receiveIdentity(frame, outgoing: &outgoing)
+        }
+        if kind == 0x02001000, frame.channel == 0x8001, setupStage == .link, !stopping {
+            let fields = try ProtoFields(frame.payload)
+            guard try fields.requiredInteger(1) == 1 else {
+                throw BandProtocolError("The band couldn't finish setting up the connection. Try reconnecting.")
+            }
+            setupStage = .deviceInfo
+            outgoing.append(try encrypt(BandWire.frame(channel: 0x8003, words: [0x8100ce56, 0x02000314], payload:
+                BandWire.field(1, 1) + BandWire.field(3, Data()))))
+            return []
+        }
+        if kind == 0x0300c001, !stopping {
+            if frame.channel == 3, setupStage == .deviceInfo {
+                throw BandProtocolError("The band rejected gesture setup. Try reconnecting.")
+            }
+            if frame.channel == 5, setupStage == .input {
+                throw BandProtocolError("The band rejected the input subscription. Try reconnecting.")
+            }
+            if frame.channel == 6, handRequest != nil {
+                handRequest = nil
+                hand = nil
+                return [BandEvent(.handednessFailure("The band couldn't report its hand setting. Reconnect and try again."), at: time)]
+            }
+            return []
+        }
         // Ignore unrelated services without trying to interpret their protobuf schema.
         guard [0x02000315, 0x0200020d, 0x0200020f, 0x02000212].contains(kind) else { return [] }
+        if kind == 0x02000315, frame.channel == 3, setupStage == .deviceInfo, !stopping {
+            let fields = try ProtoFields(frame.payload)
+            guard try fields.requiredInteger(1) == 1 else { return [] }
+            guard try fields.requiredInteger(2) == 1 else {
+                throw BandProtocolError("The band rejected gesture setup. Try reconnecting.")
+            }
+            setupStage = .input
+            outgoing.append(try streamRequest(id: 2, enabled: nil))
+            outgoing.append(try streamRequest(id: 3, enabled: true))
+            outgoing.append(try requestHand(nil, reading: true, at: time))
+            return []
+        }
+        guard setupStage == .input else { return [] }
         if kind == 0x02000315, frame.channel & 0x7fff == configurationChannel & 0x7fff {
             guard !stopping else { return [] }
             return try receiveHand(ProtoFields(frame.payload), at: time, outgoing: &outgoing)
         }
-        if kind == 0x02000315, frame.channel & 0x7fff != streamChannel & 0x7fff { return [] }
+        if kind == 0x02000315, frame.channel != (streamChannel & 0x7fff) { return [] }
         let fields = try ProtoFields(frame.payload)
         if kind == 0x02000315 {
             let request = try fields.integer(1)
             if request == 3 || request == 5 {
+                guard !stopping else { return [] }
                 guard try fields.integer(2) == 1 else {
                     throw BandProtocolError("The band rejected the input subscription")
                 }
                 let flags = try ProtoFields(fields.bytes(5))
                 streamsEnabled = try streamFields.allSatisfy { try flags.contains($0) && flags.integer($0) == 1 }
                 guard streamsEnabled else { throw BandProtocolError("The band input subscription stopped") }
-                if !streaming, !stopping {
+                if !streaming {
                     streaming = true
                     return [BandEvent(.connected, at: time)]
                 }

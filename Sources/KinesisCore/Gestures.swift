@@ -27,6 +27,8 @@ public struct BandEvent: Sendable {
         case dialTurn(Double)
         case handedness(BandHand)
         case handednessFailure(String)
+        case ceremonyHTTP(CeremonyHTTPRequest)
+        case ceremonyStage(String)
     }
     public let payload: Payload
     public let receivedAt: Double

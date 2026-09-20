@@ -8,20 +8,35 @@ import KinesisCore
 @MainActor private final class RecordedConnection: BandConnection {
     private var onEvent: ((BandEvent) -> Void)?
     private var onEnd: ((Error?) -> Void)?
-    private(set) var starts = 0
+    private(set) var requests: [String] = []
+    var starts: Int { requests.count }
+    private(set) var stops = 0
+    var finishesOnStop = true
     private(set) var requestedHands: [BandHand] = []
+    private(set) var ceremonyCompletions: [CeremonyCompletion] = []
     var handWriteError: Error?
     func setHandedness(_ hand: BandHand) throws {
         if let handWriteError { throw handWriteError }
         requestedHands.append(hand)
     }
+    func resumeCeremony(_ completion: CeremonyCompletion) throws {
+        ceremonyCompletions.append(completion)
+    }
     func start(_ operation: BandOperation, onEvent: @escaping (BandEvent) -> Void,
                onEnd: @escaping (Error?) -> Void) throws {
-        starts += 1
+        guard self.onEnd == nil else { throw KinesisError(message: "A band operation is already running") }
+        switch operation {
+        case .scan: requests.append("scan")
+        case .connect(let address): requests.append("connect \(address)")
+        case .enroll(let address): requests.append("enroll \(address ?? "scan")")
+        }
         self.onEvent = onEvent
         self.onEnd = onEnd
     }
-    func stop() { finish() }
+    func stop() {
+        stops += 1
+        if finishesOnStop { finish() }
+    }
     func finish(error: Error? = nil) {
         let completion = onEnd
         onEnd = nil
@@ -47,7 +62,7 @@ import KinesisCore
     defaults.set(true, forKey: "setupCompleted")
     let connection = RecordedConnection()
     let controls = RecordingControls()
-    let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { 100 })
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, sessionStore: SavedSessionStore(), clock: { 100 })
     model.selectedAddress = "test-band"
     model.connect()
     connection.send(.connected)
@@ -89,7 +104,7 @@ import KinesisCore
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let connection = RecordedConnection()
-    let model = BandModel(defaults: defaults, connection: connection, clock: { 100 })
+    let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
     model.selectedAddress = "test-band"
     var movement: [Double] = []
     let subscription = model.dialTurns.sink { movement.append($0) }
@@ -121,7 +136,7 @@ import KinesisCore
     defer { defaults.removePersistentDomain(forName: suite) }
     defaults.set(73, forKey: "totalGestureCount")
     let connection = RecordedConnection()
-    let model = BandModel(defaults: defaults, connection: connection, clock: { 100 })
+    let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
     model.selectedAddress = "test-band"
     model.connect()
     let swipe = BandGesture(sequence: 42, timestampUs: 12345, finger: "thumb", action: "left", receivedAt: 100)
@@ -135,7 +150,7 @@ import KinesisCore
     #expect(model.gestureCount == 1)
     #expect(defaults.integer(forKey: "totalGestureCount") == 74)
     await model.shutdown()
-    let reopened = BandModel(defaults: defaults, connection: RecordedConnection(), clock: { 100 })
+    let reopened = BandModel(defaults: defaults, connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
     #expect(reopened.totalGestureCount == 74)
     #expect(reopened.gestureCount == 0)
     await reopened.shutdown()
@@ -148,14 +163,14 @@ import KinesisCore
     let band = ["address": "test-band", "name": "Test Band"]
     defaults.set(try JSONSerialization.data(withJSONObject: band), forKey: "band")
     defaults.set(true, forKey: "setupCompleted")
-    let paused = BandModel(defaults: defaults, connection: RecordedConnection(), clock: { 100 })
+    let paused = BandModel(defaults: defaults, connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
     paused.startAutomatically()
     #expect(!paused.wantsConnection)
     await paused.shutdown()
 
     defaults.set(true, forKey: "startsAutomatically")
     defaults.set(false, forKey: "setupCompleted")
-    let setup = BandModel(defaults: defaults, connection: RecordedConnection(), clock: { 100 })
+    let setup = BandModel(defaults: defaults, connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
     setup.startAutomatically()
     #expect(!setup.wantsConnection)
     #expect(!setup.controlsEnabled)
@@ -163,7 +178,7 @@ import KinesisCore
 
     defaults.set(true, forKey: "setupCompleted")
     let connection = RecordedConnection()
-    let automatic = BandModel(defaults: defaults, connection: connection, clock: { 100 })
+    let automatic = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
     automatic.startAutomatically()
     #expect(automatic.wantsConnection)
     connection.send(.connected)
@@ -183,7 +198,7 @@ import KinesisCore
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let connection = RecordedConnection()
-    let model = BandModel(defaults: defaults, connection: connection, clock: { 100 })
+    let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
     model.selectedAddress = "test-band"
     var movement: [Double] = []
     let subscription = model.dialTurns.sink { movement.append($0) }
@@ -234,7 +249,7 @@ import KinesisCore
     let connection = RecordedConnection()
     let controls = RecordingControls()
     var now = 100.0
-    let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { now })
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, sessionStore: SavedSessionStore(), clock: { now })
     model.selectedAddress = "test-band"
     model.dialTarget = target
     var practice: [Double] = []
@@ -277,7 +292,7 @@ import KinesisCore
     let connection = RecordedConnection()
     let controls = RecordingControls()
     var now = 100.0
-    let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { now })
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, sessionStore: SavedSessionStore(), clock: { now })
     model.selectedAddress = "test-band"
     model.connect()
     connection.send(.connected)
@@ -326,7 +341,7 @@ import KinesisCore
     let connection = RecordedConnection()
     let controls = RecordingControls()
     var now = 100.0
-    let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { now })
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, sessionStore: SavedSessionStore(), clock: { now })
     model.selectedAddress = "test-band"
     model.connect()
     connection.send(.handedness(.right))
@@ -373,7 +388,7 @@ import KinesisCore
     let connection = RecordedConnection()
     let controls = RecordingControls()
     controls.trusted = false
-    let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { 100 })
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, sessionStore: SavedSessionStore(), clock: { 100 })
     model.startAutomatically()
     #expect(!model.controlsEnabled)
     connection.send(.connected)
@@ -419,7 +434,7 @@ import KinesisCore
     let notifications = NotificationCenter()
     var now = 100.0
     let model = BandModel(defaults: defaults, connection: connection, controls: controls,
-                          workspaceNotifications: notifications, clock: { now })
+                          workspaceNotifications: notifications, sessionStore: SavedSessionStore(), clock: { now })
     model.selectedAddress = "test-band"
     model.connect()
     connection.send(.handedness(.right))
@@ -454,7 +469,7 @@ import KinesisCore
     defer { defaults.removePersistentDomain(forName: suite) }
     let notifications = NotificationCenter()
     let connection = RecordedConnection()
-    let model = BandModel(defaults: defaults, connection: connection, workspaceNotifications: notifications, clock: { 100 })
+    let model = BandModel(defaults: defaults, connection: connection, workspaceNotifications: notifications, sessionStore: SavedSessionStore(), clock: { 100 })
     model.scan()
     #expect(model.busy && !model.wantsConnection)
     notifications.post(name: NSWorkspace.willSleepNotification, object: nil)
@@ -472,7 +487,7 @@ import KinesisCore
     defer { defaults.removePersistentDomain(forName: suite) }
     let connection = RecordedConnection()
     var now = 100.0
-    let model = BandModel(defaults: defaults, connection: connection, clock: { now })
+    let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { now })
     model.selectedAddress = "test-band"
     model.connect()
     connection.send(.connected)
@@ -484,5 +499,604 @@ import KinesisCore
     connection.send(.connected, at: now)
     connection.send(.heartbeat, at: now)
     #expect(model.live)
+    await model.shutdown()
+}
+
+@Test(arguments: [false, true]) @MainActor
+func recoveryScanWaitsForShutdownAndPausesControls(streaming: Bool) async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band")
+    let discovered = BandDevice(address: UUID().uuidString, name: remembered.name, rssi: -40)
+    defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
+    defaults.set(true, forKey: "setupCompleted")
+    let connection = RecordedConnection()
+    connection.finishesOnStop = false
+    let controls = RecordingControls()
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.connect()
+    if streaming {
+        connection.send(.handedness(.right))
+        connection.send(.connected)
+        connection.send(.heartbeat)
+        model.toggleControls()
+        connection.send(.dialState(true))
+        #expect(model.live && model.controlsEnabled && model.dialEngaged)
+        #expect(model.deviceLabel(remembered) == "Meta Band · connected")
+    }
+
+    #expect(model.canScan)
+    model.scan()
+    #expect(connection.stops == 1)
+    #expect(connection.requests == ["connect \(remembered.address)"])
+    #expect(model.busy && !model.wantsConnection && !model.canScan)
+    #expect(!model.live && !model.controlsEnabled && !model.dialEngaged && !model.handConfirmed)
+    #expect(model.phase == "Disconnecting before scan…")
+    model.scan()
+    #expect(connection.stops == 1)
+
+    connection.finish(error: KinesisError(message: "Old connection closed"))
+    #expect(connection.requests == ["connect \(remembered.address)", "scan"])
+    #expect(model.busy && model.phase == "Finding your band…" && model.error == nil)
+    connection.send(.devices([discovered]))
+    connection.finish()
+    #expect(model.devices == [discovered, remembered])
+    #expect(model.selectedAddress == remembered.address)
+    #expect(!model.busy && !model.wantsConnection && !model.controlsEnabled && model.canScan)
+    await model.shutdown()
+}
+
+@Test(arguments: ["scan", "forget"]) @MainActor
+func recoveryCancelsPendingReconnect(action: String) async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band")
+    defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(), sessionStore: SavedSessionStore(), clock: { 100 })
+    model.connect()
+    connection.finish(error: KinesisError(message: "Connection lost"))
+    #expect(model.wantsConnection && !model.busy && model.canScan)
+    #expect(model.phase == "Reconnecting in 2s…")
+    if action == "scan" {
+        model.scan()
+        connection.send(.devices([remembered]))
+        connection.finish()
+    } else {
+        model.forgetBand()
+        #expect(model.selectedAddress.isEmpty && defaults.data(forKey: "band") == nil)
+    }
+    #expect(!model.wantsConnection && !model.busy && model.canScan)
+    // Leave the transport idle past the original retry so an uncancelled reconnect is observable.
+    try await Task.sleep(for: .milliseconds(2200))
+    let expected = ["connect \(remembered.address)"] + (action == "scan" ? ["scan"] : [])
+    #expect(connection.requests == expected)
+    #expect(model.phase == "Disconnected" && !model.wantsConnection && !model.busy)
+    await model.shutdown()
+}
+
+@Test @MainActor func forgettingABandPreservesOtherPreferencesAndAllowsDiscoveryAfterRelaunch() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band", rssi: -35)
+    defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
+    defaults.set(true, forKey: "startsAutomatically")
+    defaults.set(true, forKey: "setupCompleted")
+    defaults.set("left", forKey: "bandHand")
+    defaults.set(73, forKey: "totalGestureCount")
+    defaults.set(2.0, forKey: "dialSensitivity")
+    let connection = RecordedConnection()
+    connection.finishesOnStop = false
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(), sessionStore: SavedSessionStore(), clock: { 100 })
+    var expectedPreferences = try #require(defaults.persistentDomain(forName: suite))
+    expectedPreferences.removeValue(forKey: "band")
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    connection.send(.battery(65))
+    model.toggleControls()
+    model.forgetBand()
+    #expect(connection.stops == 1)
+    #expect(model.selectedAddress.isEmpty && model.devices.isEmpty && model.discoveredAddresses.isEmpty)
+    #expect(model.battery == nil && model.error == nil)
+    #expect(model.busy && !model.canScan && !model.wantsConnection && !model.controlsEnabled)
+    let actualPreferences = try #require(defaults.persistentDomain(forName: suite))
+    #expect(NSDictionary(dictionary: actualPreferences).isEqual(to: expectedPreferences))
+    connection.finish()
+    #expect(!model.busy && model.canScan)
+    await model.shutdown()
+
+    let newConnection = RecordedConnection()
+    let reopened = BandModel(defaults: defaults, connection: newConnection, controls: RecordingControls(), sessionStore: SavedSessionStore(), clock: { 100 })
+    reopened.startAutomatically()
+    #expect(newConnection.requests.isEmpty && !reopened.wantsConnection)
+    #expect(reopened.selectedAddress.isEmpty && reopened.devices.isEmpty && reopened.canScan)
+    #expect(reopened.startsAutomatically && !reopened.showingSetup && reopened.bandHand == .left)
+    #expect(reopened.totalGestureCount == 73 && reopened.dialSensitivity == 2)
+    let found = BandDevice(address: UUID().uuidString, name: remembered.name, rssi: -45)
+    reopened.scan()
+    newConnection.send(.devices([found]))
+    newConnection.finish()
+    #expect(newConnection.requests == ["scan"] && !reopened.wantsConnection)
+    #expect(reopened.devices == [found] && reopened.selectedAddress == found.address)
+    let saved = try JSONDecoder().decode(BandDevice.self, from: #require(defaults.data(forKey: "band")))
+    #expect(saved == found)
+    await reopened.shutdown()
+}
+
+@Test @MainActor func scanResultsDistinguishSameNamedDevicesWithoutReplacingTheRememberedSelection() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band", rssi: -35)
+    let first = BandDevice(address: UUID().uuidString, name: remembered.name, rssi: -40)
+    let second = BandDevice(address: UUID().uuidString, name: remembered.name, rssi: -50)
+    defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(), sessionStore: SavedSessionStore(), clock: { 100 })
+    #expect(model.discoveredAddresses.isEmpty)
+    #expect(model.deviceLabel(remembered) == "Meta Band · remembered")
+    model.scan()
+    connection.send(.devices([first, second]))
+    connection.finish()
+    #expect(model.devices == [first, second, remembered])
+    #expect(model.discoveredAddresses == Set([first.address, second.address]))
+    #expect(model.selectedAddress == remembered.address && !model.wantsConnection)
+    #expect(model.deviceLabel(remembered) == "Meta Band · remembered · \(remembered.address)")
+    #expect(model.deviceLabel(first) == "Meta Band · found in scan · \(first.address)")
+    #expect(model.deviceLabel(second) == "Meta Band · found in scan · \(second.address)")
+    let unchanged = try JSONDecoder().decode(BandDevice.self, from: #require(defaults.data(forKey: "band")))
+    #expect(unchanged == remembered)
+
+    model.selectedAddress = first.address
+    let selected = try JSONDecoder().decode(BandDevice.self, from: #require(defaults.data(forKey: "band")))
+    #expect(selected == first)
+    model.scan()
+    #expect(model.discoveredAddresses.isEmpty && model.devices == [first])
+    connection.send(.devices([]))
+    connection.finish()
+    #expect(model.devices == [first] && model.selectedAddress == first.address)
+    #expect(model.deviceLabel(first) == "Meta Band · remembered")
+    #expect(model.error == "No band found. Put it in pairing mode, keep it nearby, and try again.")
+    #expect(connection.requests == ["scan", "scan"])
+    await model.shutdown()
+}
+
+@Test(arguments: ["disconnect", "forget", "sleep", "shutdown"]) @MainActor
+func recoveryScanIsCancelledBeforeShutdownCompletes(action: String) async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let remembered = BandDevice(address: UUID().uuidString, name: "Meta Band")
+    defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
+    let connection = RecordedConnection()
+    connection.finishesOnStop = false
+    let notifications = NotificationCenter()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          workspaceNotifications: notifications, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.connect()
+    model.scan()
+    #expect(model.busy && model.phase == "Disconnecting before scan…")
+    connection.finishesOnStop = true
+    switch action {
+    case "disconnect": model.disconnect()
+    case "forget": model.forgetBand()
+    case "sleep":
+        notifications.post(name: NSWorkspace.willSleepNotification, object: nil)
+        try await waitUntil { !model.busy }
+        #expect(model.phase == "Mac is asleep" && !model.canScan)
+        model.scan()
+        notifications.post(name: NSWorkspace.didWakeNotification, object: nil)
+        try await waitUntil { model.phase == "Disconnected" }
+    case "shutdown":
+        await model.shutdown()
+        #expect(!model.canScan)
+        model.scan()
+    default: Issue.record("Unexpected recovery cancellation action")
+    }
+    #expect(connection.requests == ["connect \(remembered.address)"])
+    #expect(!model.busy && !model.wantsConnection && !model.controlsEnabled)
+    await model.shutdown()
+}
+
+@MainActor private final class SavedSessionStore: MetaSessionStoring {
+    var saved: MetaSession?
+    private(set) var saves = 0
+    private(set) var deletions = 0
+    func hasSavedSession() -> Bool { saved != nil }
+    func saveSession(_ session: MetaSession) { saved = session; saves += 1 }
+    func restoreSession() -> MetaSession? { saved }
+    func deleteSession() { saved = nil; deletions += 1 }
+}
+
+private struct FakePairClient: BandPairClient {
+    var pending = MetaPairClient.Pending(signature: Data([1]), receipt: "{}")
+    var final = MetaPairClient.Final(signature: Data([2]), receipt: "{}", devicePublicKey: Data(repeating: 5, count: 64))
+    var failure: Error?
+    func pairRequest(_ data: CeremonyPairRequestData) async throws -> MetaPairClient.Pending {
+        if let failure { throw failure }
+        return pending
+    }
+    func pair(_ data: CeremonyPairData) async throws -> MetaPairClient.Final {
+        if let failure { throw failure }
+        return final
+    }
+}
+
+@Test @MainActor func pairBandRunsLoginCeremonyReconnectAndDoneForAnUnclaimedBand() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let remembered = BandDevice(address: "test-band", name: "Meta Band")
+    defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
+    let connection = RecordedConnection()
+    let client = FakePairClient()
+    let store = SavedSessionStore()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in client }, sessionStore: store, clock: { 100 })
+    // A remembered band without a stored identity still needs claiming.
+    #expect(model.showsPairAction && model.canPair && !model.hasBandIdentity)
+    model.pairBand()
+    // Without a saved session the sign-in sheet comes first; nothing runs.
+    #expect(model.enrollmentStage == .login && connection.requests.isEmpty)
+    #expect(!model.canPair && model.showsPairAction && model.pairProgressText == nil)
+    model.enroll(session: MetaSession(accessToken: "token", userID: "1"))
+    #expect(store.saved?.accessToken == "token")
+    // The factory-fresh band goes straight to the ownership ceremony.
+    #expect(connection.requests == ["enroll test-band"])
+    #expect(model.enrollmentStage == .pairing && model.pairInProgress)
+    #expect(model.pairProgressText == "claiming your band…")
+    connection.send(.ceremonyStage("claiming the band"))
+    #expect(model.enrollmentStage == .working("claiming the band"))
+    #expect(model.pairProgressText == "claiming the band…")
+    let identity = BandIdentityInfo(deviceCertificate: Data([1]), serial: "S", secondaryCertificate: Data([2]))
+    connection.send(.ceremonyHTTP(.pairRequest(CeremonyPairRequestData(
+        identity: identity, nonce: Data(repeating: 3, count: 16), appPublicKey: Data(repeating: 4, count: 64)))))
+    try await waitUntil { connection.ceremonyCompletions.count == 1 }
+    connection.send(.ceremonyHTTP(.pair(CeremonyPairData(receipt: "{\"a\":1}", signature: Data([9])))))
+    try await waitUntil { connection.ceremonyCompletions.count == 2 }
+    // Streams ready finish the ceremony; the pipeline reconnects to settle.
+    connection.send(.connected)
+    try await waitUntil { connection.requests == ["enroll test-band", "connect test-band"] }
+    #expect(model.pairProgressText == "connecting to your band…" && model.enrollmentStage == .idle)
+    // The settling connect completes the run: the band stays managed.
+    connection.send(.connected)
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.wantsConnection && !model.showsPairAction)
+    #expect(model.hasSavedMetaSession && store.saved?.accessToken == "token")
+    await model.shutdown()
+}
+
+@Test @MainActor func aSavedSessionClaimsAnUnclaimedBandStraightAway() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let remembered = BandDevice(address: "test-band", name: "Meta Band")
+    defaults.set(try JSONEncoder().encode(remembered), forKey: "band")
+    let connection = RecordedConnection()
+    let client = FakePairClient()
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "saved", userID: "7")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in client }, sessionStore: store, clock: { 100 })
+    #expect(model.hasSavedMetaSession)
+    model.pairBand()
+    // The saved session claims the band straight away; no sign-in sheet.
+    #expect(model.enrollmentStage == .pairing && connection.requests == ["enroll test-band"])
+    connection.send(.ceremonyStage("claiming the band"))
+    #expect(model.enrollmentStage == .working("claiming the band"))
+    connection.send(.connected)
+    try await waitUntil { connection.requests == ["enroll test-band", "connect test-band"] }
+    connection.send(.connected)
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.wantsConnection && !model.showsPairAction)
+    #expect(store.saved?.accessToken == "saved" && model.hasSavedMetaSession)
+    await model.shutdown()
+}
+
+@Test @MainActor func pairBandRetriesAMismatchOnceThenEnrollsWithTheSavedSession() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let band = "test-\(UUID().uuidString)"
+    defer { BandIdentity.delete(for: band) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
+    try BandIdentity.generate(for: band)
+    let connection = RecordedConnection()
+    let client = FakePairClient()
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "saved", userID: "7")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in client }, sessionStore: store, clock: { 100 })
+    // A stored identity means the paired surface: no pairing action.
+    #expect(model.hasBandIdentity && !model.showsPairAction)
+    model.pairBand()
+    #expect(connection.requests == ["connect \(band)"] && model.pairInProgress)
+    // The band refuses the stored key: one retry drops the identity.
+    connection.finish(error: BandIdentityMismatchError("band enrolled to a different key. forget the stored band identity to reconnect without it."))
+    try await waitUntil { connection.requests == ["connect \(band)", "connect \(band)"] }
+    #expect(model.pairInProgress && model.pairFailure == nil && model.error == nil)
+    // The retry is rejected too: the pipeline claims the band instead.
+    connection.finish(error: KinesisError(message: "The band rejected gesture setup. Try reconnecting."))
+    try await waitUntil { connection.requests == ["connect \(band)", "connect \(band)", "enroll \(band)"] }
+    #expect(model.enrollmentStage == .pairing)
+    connection.send(.connected)
+    try await waitUntil { connection.requests.count == 4 }
+    #expect(connection.requests.last == "connect \(band)")
+    connection.send(.connected)
+    try await waitUntil { !model.pairInProgress }
+    // The session survives; no sign-in ever appeared.
+    #expect(store.saved?.accessToken == "saved" && model.hasSavedMetaSession)
+    #expect(model.pairFailure == nil && model.error == nil)
+    await model.shutdown()
+}
+
+@Test @MainActor func aPairFailureShowsOneLowercaseLineAndTheButtonRetries() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let band = "test-\(UUID().uuidString)"
+    defer { BandIdentity.delete(for: band) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
+    try BandIdentity.generate(for: band)
+    let connection = RecordedConnection()
+    let store = SavedSessionStore()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    model.pairBand()
+    #expect(connection.requests == ["connect \(band)"])
+    // A plain failure ends the run with one lowercase line, no auto-retry.
+    connection.finish(error: KinesisError(message: "The band took too long to respond. Try reconnecting."))
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.pairFailure == "the band took too long to respond. try reconnecting.")
+    #expect(model.enrollmentStage == .idle && model.canPair && model.showsPairAction)
+    #expect(model.error == nil && connection.requests == ["connect \(band)"])
+    // Pressing the button again retries the pipeline.
+    model.pairBand()
+    #expect(connection.requests == ["connect \(band)", "connect \(band)"] && model.pairFailure == nil)
+    connection.send(.connected)
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.wantsConnection)
+    await model.shutdown()
+}
+
+@Test @MainActor func anOwnershipRejectionSurfacesTheDedicatedLineUnderThePairButton() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let band = "test-\(UUID().uuidString)"
+    defer { BandIdentity.delete(for: band) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
+    let connection = RecordedConnection()
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "saved", userID: "7")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    model.pairBand()
+    try await waitUntil { connection.requests == ["enroll \(band)"] }
+    // The band reports 0x1042: its stored owner is a different meta account.
+    connection.finish(error: BandProtocolError(OwnershipCeremony.failureMessage(0x1042)))
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.pairFailure == OwnershipCeremony.failureMessage(0x1042))
+    #expect(model.error == nil && model.enrollmentStage == .idle && model.showsPairAction)
+    await model.shutdown()
+}
+
+@Test @MainActor func pairBandScansSelectsAndClaimsWhenNothingIsRemembered() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let connection = RecordedConnection()
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "saved", userID: "7")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    #expect(model.showsPairAction && model.canPair)
+    model.pairBand()
+    // Scanning is the claim-needing flow, so the hold-button hint shows.
+    #expect(connection.requests == ["scan"] && model.pairProgressText == "finding your band…")
+    #expect(model.showsHoldHint)
+    let found = BandDevice(address: "found-band", name: "Meta Band", rssi: -40)
+    connection.send(.devices([found]))
+    #expect(model.selectedAddress == "found-band")
+    connection.finish()
+    // The found band has no stored identity: the ceremony claims it.
+    try await waitUntil { connection.requests == ["scan", "enroll found-band"] }
+    connection.send(.connected)
+    try await waitUntil { connection.requests == ["scan", "enroll found-band", "connect found-band"] }
+    connection.send(.connected)
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.selectedAddress == "found-band" && model.wantsConnection)
+    await model.shutdown()
+}
+
+@Test @MainActor func repeatedEmptyScansSurfaceTheHoldButtonHint() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.pairBand()
+    connection.send(.devices([]))
+    connection.finish()
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.pairFailure == "no band found. put the band in pairing mode and pair again.")
+    #expect(model.emptyScans == 1 && !model.showsHoldHint && model.canPair)
+    // A second empty scan keeps the hold-button hint up.
+    model.pairBand()
+    connection.send(.devices([]))
+    connection.finish()
+    try await waitUntil { model.emptyScans == 2 }
+    #expect(!model.pairInProgress && model.showsHoldHint && model.canPair)
+    await model.shutdown()
+}
+
+@Test @MainActor func forgetEverythingClearsTheBandIdentitySessionAndRememberedBand() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let band = "test-\(UUID().uuidString)"
+    defer { BandIdentity.delete(for: band) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
+    try BandIdentity.generate(for: band)
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "token", userID: "1")
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    try await waitUntil { model.live }
+    #expect(model.hasBandIdentity && model.hasSavedMetaSession && !model.showsPairAction)
+    model.forgetEverything()
+    #expect(model.selectedAddress.isEmpty && model.devices.isEmpty && !model.live)
+    #expect(!model.hasBandIdentity && !BandIdentity.exists(for: band))
+    #expect(!model.hasSavedMetaSession && store.saved == nil)
+    #expect(!model.wantsConnection && !model.controlsEnabled)
+    #expect(defaults.data(forKey: "band") == nil)
+    try await waitUntil { !model.busy }
+    // Back to the unpaired surface with the one button.
+    #expect(model.showsPairAction && model.canPair)
+    await model.shutdown()
+}
+
+@Test @MainActor func switchingAccountsForcesTheSignInSheetOnTheNextPair() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: "test-band", name: "Meta Band")), forKey: "band")
+    let connection = RecordedConnection()
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "old", userID: "1")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    #expect(model.hasSavedMetaSession)
+    model.switchMetaAccount()
+    #expect(!model.hasSavedMetaSession && store.saved == nil && store.deletions == 1)
+    // The next pair press starts at the sign-in sheet, not the old account.
+    model.pairBand()
+    #expect(model.enrollmentStage == .login && connection.requests.isEmpty && model.pairInProgress)
+    await model.shutdown()
+}
+
+@Test @MainActor func switchingAccountsMidCeremonyRestartsAtTheSignInSheet() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: "test-band", name: "Meta Band")), forKey: "band")
+    let connection = RecordedConnection()
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "old", userID: "1")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    model.pairBand()
+    #expect(connection.requests == ["enroll test-band"])
+    let identity = BandIdentityInfo(deviceCertificate: Data([1]), serial: "S", secondaryCertificate: Data([2]))
+    connection.send(.ceremonyHTTP(.pairRequest(CeremonyPairRequestData(
+        identity: identity, nonce: Data(repeating: 3, count: 16), appPublicKey: Data(repeating: 4, count: 64)))))
+    try await waitUntil { connection.ceremonyCompletions.count == 1 }
+    // The escape hatch winds the ceremony down and asks for one sign-in.
+    model.switchMetaAccount()
+    #expect(store.saved == nil && !model.hasSavedMetaSession)
+    try await waitUntil { !model.busy }
+    #expect(model.enrollmentStage == .login && model.pairInProgress)
+    // A fresh account session restarts the claim; the band binds to it.
+    model.enroll(session: MetaSession(accessToken: "fresh", userID: "2"))
+    #expect(store.saved?.accessToken == "fresh")
+    try await waitUntil { connection.requests == ["enroll test-band", "enroll test-band"] }
+    connection.send(.connected)
+    try await waitUntil { connection.requests.count == 3 }
+    connection.send(.connected)
+    try await waitUntil { !model.pairInProgress }
+    #expect(model.enrollmentStage == .idle && model.wantsConnection)
+    await model.shutdown()
+}
+
+@Test @MainActor func anExpiredSessionMidCeremonyAsksForOneSignIn() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: "test-band", name: "Meta Band")), forKey: "band")
+    let connection = RecordedConnection()
+    let client = FakePairClient(failure: MetaSessionInvalidError(message: "your meta session expired. sign in to claim the band again."))
+    let store = SavedSessionStore()
+    store.saved = MetaSession(accessToken: "stale", userID: "7")
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in client }, sessionStore: store, clock: { 100 })
+    model.pairBand()
+    #expect(model.enrollmentStage == .pairing && connection.requests == ["enroll test-band"])
+    let identity = BandIdentityInfo(deviceCertificate: Data([1]), serial: "S", secondaryCertificate: Data([2]))
+    connection.send(.ceremonyHTTP(.pairRequest(CeremonyPairRequestData(
+        identity: identity, nonce: Data(repeating: 3, count: 16), appPublicKey: Data(repeating: 4, count: 64)))))
+    // The auth-class failure winds the connection down, then asks for one sign-in.
+    try await waitUntil { model.enrollmentStage == .login }
+    #expect(store.saved == nil && !model.hasSavedMetaSession && !model.busy && model.pairInProgress)
+    // Signing in again saves the fresh session and restarts the ceremony:
+    // the old state machine lived in the closed connection.
+    model.enroll(session: MetaSession(accessToken: "fresh", userID: "7"))
+    #expect(model.enrollmentStage == .pairing)
+    #expect(connection.requests == ["enroll test-band", "enroll test-band"])
+    #expect(store.saved?.accessToken == "fresh" && model.hasSavedMetaSession)
+    await model.shutdown()
+}
+
+@Test @MainActor func theBandPageFollowsTheTwoActionStateMatrix() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let store = SavedSessionStore()
+    // First run: nothing remembered. The one button is the whole surface.
+    let fresh = BandModel(defaults: defaults, connection: RecordedConnection(), controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    #expect(fresh.showsPairAction && fresh.canPair)
+    await fresh.shutdown()
+
+    // A remembered, unclaimed band still funnels into the button.
+    defaults.set(try JSONEncoder().encode(BandDevice(address: "unclaimed", name: "Meta Band")), forKey: "band")
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    #expect(model.showsPairAction && !model.hasBandIdentity)
+    // While a pair run is in flight the button stays with its progress.
+    model.pairBand()
+    #expect(model.pairInProgress && model.showsPairAction && !model.canPair)
+    model.cancelEnrollment()
+    #expect(!model.pairInProgress && model.canPair && model.showsPairAction)
+
+    // An enrolled band shows the paired surface instead.
+    let band = "test-\(UUID().uuidString)"
+    defer { BandIdentity.delete(for: band) }
+    defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
+    try BandIdentity.generate(for: band)
+    let rejecting = RecordedConnection()
+    let enrolled = BandModel(defaults: defaults, connection: rejecting, controls: RecordingControls(),
+                             pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+    #expect(enrolled.hasBandIdentity && !enrolled.showsPairAction)
+    // Connected and streaming: all pairing surfaces hide.
+    enrolled.connect()
+    #expect(!enrolled.showsPairAction)
+    rejecting.send(.connected)
+    rejecting.send(.heartbeat)
+    try await waitUntil { enrolled.live }
+    #expect(!enrolled.showsPairAction)
+    // Disconnected but healthy stays paired. The band refusing this Mac
+    // brings the pair button back for recovery.
+    rejecting.finish(error: BandIdentityMismatchError("band enrolled to a different key. forget the stored band identity to reconnect without it."))
+    #expect(!enrolled.bandRejectsIdentity)
+    try await waitUntil { rejecting.starts == 2 }
+    rejecting.finish(error: KinesisError(message: "The band rejected gesture setup. Try reconnecting."))
+    try await waitUntil { enrolled.bandRejectsIdentity }
+    enrolled.disconnect()
+    try await waitUntil { !enrolled.busy }
+    #expect(enrolled.showsPairAction && enrolled.canPair)
+    // Forget band returns everything to the unpaired surface.
+    enrolled.forgetEverything()
+    #expect(enrolled.showsPairAction && !enrolled.hasBandIdentity && enrolled.selectedAddress.isEmpty)
+    await enrolled.shutdown()
     await model.shutdown()
 }

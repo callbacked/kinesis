@@ -269,73 +269,91 @@ private struct GestureSettingsView: View {
 
 private struct BandSettingsView: View {
     @ObservedObject var model: BandModel
+    @State private var confirmingForget = false
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             Text("just you and your band.").font(.system(size: 32)).tracking(-1.2)
-            HStack(spacing: 25) {
-                BandArtwork().frame(width: 150, height: 135)
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(model.bandName.lowercased()).font(.system(size: 21)).tracking(-0.5)
-                    ConnectionBadge(live: model.live, text: model.phase)
-                    if let battery = model.battery {
-                        Text("\(battery)% battery").font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
-                    }
-                }
-                Spacer()
+            if model.showsPairAction {
+                PairBandControl(model: model)
             }
-            ConnectionControls(model: model)
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    Text("band hand").font(.system(size: 13, weight: .medium))
-                    Spacer()
-                    Picker("Band hand", selection: Binding(get: { model.pendingHand ?? model.bandHand }, set: { model.selectHand($0) })) {
-                        ForEach(BandHand.allCases) { hand in Text(hand.rawValue).tag(hand) }
-                    }.pickerStyle(.segmented).labelsHidden().frame(width: 150)
-                    .disabled(!model.canChangeHand)
-                }
-                Text(model.handSettingStatus)
-                    .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
-                Rectangle().fill(KinesisStyle.line).frame(height: 1)
-                Toggle(isOn: $model.startsAutomatically) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("start automatically").font(.system(size: 13, weight: .medium))
-                        Text("connect your band and enable controls when kinesis opens.")
-                            .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+            if !model.selectedAddress.isEmpty {
+                bandCard
+                VStack(alignment: .leading, spacing: 18) {
+                    controlsRow
+                    Rectangle().fill(KinesisStyle.line).frame(height: 1)
+                    HStack {
+                        Text("band hand").font(.system(size: 13, weight: .medium))
+                        Spacer()
+                        Picker("Band hand", selection: Binding(get: { model.pendingHand ?? model.bandHand }, set: { model.selectHand($0) })) {
+                            ForEach(BandHand.allCases) { hand in Text(hand.rawValue).tag(hand) }
+                        }.pickerStyle(.segmented).labelsHidden().frame(width: 150)
+                        .disabled(!model.canChangeHand)
                     }
-                }.toggleStyle(.switch).controlSize(.small).tint(KinesisStyle.blue)
-            }.padding(18).background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 14))
-            PermissionCard(model: model)
-            Text("the connection stays on this Mac. no glasses, phone, or account needed.")
+                    Text(model.handSettingStatus)
+                        .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                    Rectangle().fill(KinesisStyle.line).frame(height: 1)
+                    Toggle(isOn: $model.startsAutomatically) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("start automatically").font(.system(size: 13, weight: .medium))
+                            Text("connect your band and enable controls when kinesis opens.")
+                                .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                        }
+                    }.toggleStyle(.switch).controlSize(.small).tint(KinesisStyle.blue)
+                }.padding(18).background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                PermissionCard(model: model)
+                HStack(alignment: .center) {
+                    Text("clears the remembered band, its stored identity, and the saved meta sign-in.")
+                        .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                    Spacer()
+                    Button("forget band") { confirmingForget = true }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                        .help("clears the remembered band, its stored identity, and the saved meta sign-in.")
+                }
+            }
+            Text("the connection stays on this Mac. no glasses or phone needed.")
                 .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
         }
+        .confirmationDialog("forget this band?", isPresented: $confirmingForget, titleVisibility: .visible) {
+            Button("forget band", role: .destructive) { model.forgetEverything() }
+            Button("cancel", role: .cancel) {}
+        } message: {
+            Text("kinesis will forget this band and sign you out of meta. the band stays enrolled to your account.")
+        }
     }
-}
 
-struct ConnectionControls: View {
-    @ObservedObject var model: BandModel
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if !model.live {
-                Text(model.selectedAddress.isEmpty ? "put your band in pairing mode and keep it nearby." : "your band is remembered. wear it and connect when you’re ready.")
-                    .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary).lineSpacing(3)
-            }
-            if !model.devices.isEmpty {
-                Picker("band", selection: $model.selectedAddress) {
-                    ForEach(model.devices) { Text($0.name).tag($0.address) }
-                }.disabled(model.busy || model.wantsConnection)
-            }
-            HStack(spacing: 10) {
-                Button(model.busy && !model.wantsConnection ? "finding…" : "find band") { model.scan() }
-                    .buttonStyle(KinesisButtonStyle()).disabled(!model.canScan)
-                if !model.selectedAddress.isEmpty {
-                    Button(model.wantsConnection ? "disconnect" : "connect") {
-                        if model.wantsConnection { model.disconnect() } else { model.connect() }
-                    }.buttonStyle(KinesisButtonStyle(prominent: !model.wantsConnection))
-                        .disabled(model.busy && !model.wantsConnection)
+    private var bandCard: some View {
+        HStack(spacing: 25) {
+            BandArtwork().frame(width: 150, height: 135)
+            VStack(alignment: .leading, spacing: 12) {
+                Text(model.bandName.lowercased()).font(.system(size: 21)).tracking(-0.5)
+                ConnectionBadge(live: model.live, text: model.phase)
+                if let battery = model.battery {
+                    Text("\(battery)% battery").font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
                 }
-                Spacer(minLength: 0)
-                if model.busy && !model.live { ProgressView().controlSize(.small).tint(KinesisStyle.ink) }
             }
+            Spacer()
+            if model.live || model.wantsConnection {
+                Button("disconnect") { model.disconnect() }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                    .disabled(model.busy && !model.wantsConnection)
+                    .help("stops using the band until kinesis reconnects.")
+            }
+        }
+    }
+
+    private var controlsRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("enable controls").font(.system(size: 13, weight: .medium))
+                Text(model.controlsEnabled ? "your gestures send their shortcuts." : "gestures stay silent until you turn this on.")
+                    .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+            }
+            Spacer()
+            Toggle("Enable controls", isOn: Binding(
+                get: { model.controlsEnabled },
+                set: { $0 ? model.toggleControls() : model.pause() }))
+            .toggleStyle(.switch).controlSize(.small).tint(KinesisStyle.blue)
+            .disabled(!model.live && !model.controlsEnabled)
         }
     }
 }
