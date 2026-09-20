@@ -25,16 +25,19 @@ struct HandPose: Equatable {
     static let pinchMiddle = HandPose(index: [8, 14, 8], middle: [48, 56, 28], ring: [26, 32, 16], pinky: [30, 34, 18],
                                       thumbBase: [-33.1, 10.1, -2.1], thumbMiddle: 19.1, thumbEnd: 6.2)
 
-    /// A loose fist with the thumb riding the side of the index finger, as Meta shows a swipe.
-    static func swipe(_ thumbBase: SIMD3<Float>, _ thumbMiddle: Float, _ thumbEnd: Float) -> HandPose {
-        HandPose(index: [58, 78, 38], middle: [70, 92, 46], ring: [74, 96, 48], pinky: [78, 98, 50],
+    /// A loose half-curl with the thumb on the side of the index finger. Left and right
+    /// slide the thumb along the finger. Up and down are the thumb's own joints: it
+    /// straightens and lifts above the finger, or curls under it while the index
+    /// comes in to keep contact.
+    static func swipe(index: SIMD3<Float> = [44, 60, 30], _ thumbBase: SIMD3<Float>, _ thumbMiddle: Float, _ thumbEnd: Float) -> HandPose {
+        HandPose(index: index, middle: [50, 66, 32], ring: [54, 70, 34], pinky: [58, 72, 36],
                  thumbBase: thumbBase, thumbMiddle: thumbMiddle, thumbEnd: thumbEnd)
     }
-    static let swipeCenter = swipe([-23.0, 1.6, -0.8], 13.6, 4.3)
-    static let swipeLeft = swipe([-22.1, 10.5, -1.6], 16.2, 4.2)
-    static let swipeRight = swipe([-23.0, -8.5, -1.2], 13.6, 4.4)
-    static let swipeUp = swipe([-22.7, 3.7, -1.5], 14.3, 4.2)
-    static let swipeDown = swipe([-19.8, -2.7, 0.2], 20.9, 6.7)
+    static let swipeCenter = swipe([-24.2, -5.4, -0.6], 14, 22)
+    static let swipeLeft = swipe([-28.0, 4.2, -1.7], 10, 12)
+    static let swipeRight = swipe([-20.6, -17.2, 1.9], 18, 30)
+    static let swipeUp = swipe([-39.2, -3.9, -3.3], 2, 0)
+    static let swipeDown = swipe(index: [52, 70, 36], [-9.0, -6.4, 2.4], 34, 62)
 
     static func swipeEnd(_ direction: SwipeDirection) -> HandPose {
         switch direction {
@@ -166,6 +169,7 @@ struct HandMesh: Decodable {
     let skin = SCNNode()
     private var bones: [SCNNode] = []
     private var restLocal: [simd_float4x4] = []
+    private var restWorld: [simd_float4x4] = []
     private var indexOf: [String: Int] = [:]
     private var current = HandPose.relaxed.vector
     private var velocity = [Float](repeating: 0, count: HandPose.width)
@@ -185,6 +189,7 @@ struct HandMesh: Decodable {
                                     SIMD4(joint.rest[8], joint.rest[9], joint.rest[10], joint.rest[11]),
                                     SIMD4(joint.rest[12], joint.rest[13], joint.rest[14], joint.rest[15])))
         }
+        restWorld = rest
         bones = mesh.joints.map { joint in
             let node = SCNNode()
             node.name = joint.name
@@ -214,6 +219,27 @@ struct HandMesh: Decodable {
     /// Where the hand is now, and where it is heading.
     var pose: HandPose { HandPose(vector: current) }
     var goal: HandPose { HandPose(vector: target) }
+
+    /// Where the visible skin sits under the current pose, seen through `view`. The
+    /// wrist fades to nothing, so only skin that can be seen is counted.
+    func visibleBounds(of mesh: HandMesh, through view: simd_float4x4) -> (low: SIMD2<Float>, high: SIMD2<Float>) {
+        let skinning = bones.enumerated().map { index, bone in
+            root.simdConvertTransform(bone.simdWorldTransform, from: nil) * restWorld[index].inverse
+        }
+        var low = SIMD2<Float>(repeating: .infinity), high = SIMD2<Float>(repeating: -.infinity)
+        for vertex in 0..<(mesh.positions.count / 3) where mesh.positions[vertex * 3 + 1] > 0.1 {
+            let rest = SIMD4(mesh.positions[vertex * 3], mesh.positions[vertex * 3 + 1], mesh.positions[vertex * 3 + 2], 1)
+            var skinned = SIMD4<Float>.zero
+            for slot in 0..<4 {
+                let weight = mesh.boneWeights[vertex * 4 + slot]
+                if weight > 0 { skinned += weight * (skinning[Int(mesh.boneIndices[vertex * 4 + slot])] * rest) }
+            }
+            let seen = view * skinned
+            low = simd_min(low, SIMD2(seen.x, seen.y))
+            high = simd_max(high, SIMD2(seen.x, seen.y))
+        }
+        return (low, high)
+    }
 
     /// A joint's position in the hand's own space, under the current pose.
     func position(of joint: String) -> SIMD3<Float>? {

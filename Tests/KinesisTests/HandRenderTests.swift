@@ -21,6 +21,8 @@ import KinesisCore
         ("3-pinch-middle", .pinchMiddle, [1, 0, 1]),
         ("4-swipe-left", .swipeLeft, [1, 1, 0]),
         ("5-swipe-right", .swipeRight, [1, 1, 0]),
+        ("7-swipe-up", .swipeUp, [1, 1, 0]),
+        ("8-swipe-down", .swipeDown, [1, 1, 0]),
         ("6-pinch-roll", HandPose.pinchIndex.with(roll: 45), [1, 1, 0]),
     ]
     for dark in [false, true] {

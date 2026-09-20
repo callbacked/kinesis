@@ -71,6 +71,16 @@ import KinesisCore
     let start = try #require(rig.position(of: "thumb-tip"))
     rig.snap(to: .swipeEnd(.left))
     #expect(simd_distance(start, try #require(rig.position(of: "thumb-tip"))) > 0.35)
+    // Up and down are the thumb's own joints, not a slide. It straightens to go up and
+    // curls to go down, and the index finger comes in to keep contact on the way down.
+    #expect(HandPose.swipeUp.thumbEnd < 5 && HandPose.swipeDown.thumbEnd > 50)
+    #expect(HandPose.swipeDown.index.y > HandPose.swipeUp.index.y)
+    rig.snap(to: .swipeUp)
+    let lifted = try #require(rig.position(of: "thumb-tip"))
+    rig.snap(to: .swipeDown)
+    let tucked = try #require(rig.position(of: "thumb-tip"))
+    // In hand space +z is the back of the hand, so up ends above down.
+    #expect(lifted.z > tucked.z + 0.3)
 }
 
 @Test @MainActor func aNewGestureBendsTheMotionInsteadOfCuttingIt() throws {

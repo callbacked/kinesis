@@ -75,7 +75,6 @@ struct HandSceneView: NSViewRepresentable {
             setBackground(dark: false)
             camera.camera = SCNCamera()
             camera.camera?.usesOrthographicProjection = true
-            camera.camera?.orthographicScale = viewpoint == .teaching ? 1.95 : 1.8
             camera.position = SCNVector3(0, 0, 10)
             scene.rootNode.addChildNode(camera)
 
@@ -122,7 +121,16 @@ struct HandSceneView: NSViewRepresentable {
                 let posed = SCNNode()
                 posed.addChildNode(rig.root)
                 posed.addChildNode(rig.skin)
-                let view = Self.view(of: mesh)
+                // Frame the relaxed hand with room to spare, so the wrist's fade always
+                // finishes inside the view and no edge ever cuts through the hand.
+                let facing = Self.facing
+                let bounds = rig.visibleBounds(of: mesh, through: facing)
+                let middle = (bounds.low + bounds.high) / 2
+                let reach = max(bounds.high.x - bounds.low.x, bounds.high.y - bounds.low.y)
+                camera.camera?.orthographicScale = Double(reach / 2 / (viewpoint == .teaching ? 0.66 : 0.72))
+                var place = matrix_identity_float4x4
+                place.columns.3 = SIMD4(-middle.x, -middle.y, 0, 1)
+                let view = place * facing
                 posed.simdTransform = view
                 // The dial is a knob held in a pinch, so the hand turns around the
                 // pinch along the forearm's line, and the pinch stays where it is.
@@ -155,26 +163,14 @@ struct HandSceneView: NSViewRepresentable {
         /// low on the right and the fingers reaching up to the left, so a pinch
         /// reads in silhouette. In hand space the fingers run along +y, the back
         /// of the hand faces +z, and the thumb sits toward -x.
-        private static func view(of mesh: HandMesh) -> simd_float4x4 {
-            var low = SIMD3<Float>(repeating: .infinity), high = SIMD3<Float>(repeating: -.infinity)
-            for offset in stride(from: 0, to: mesh.positions.count, by: 3) {
-                let vertex = SIMD3(mesh.positions[offset], mesh.positions[offset + 1], mesh.positions[offset + 2])
-                low = simd_min(low, vertex)
-                high = simd_max(high, vertex)
-            }
-            let center = (low + high) / 2
+        private static let facing: simd_float4x4 = {
             // Fingers to the left, the back of the hand up, the thumb side toward the camera.
             let side = simd_float4x4(columns: (SIMD4(0, 0, -1, 0), SIMD4(-1, 0, 0, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 0, 1)))
             func turn(_ degrees: Float, _ axis: SIMD3<Float>) -> simd_float4x4 {
                 simd_float4x4(simd_quatf(angle: degrees * .pi / 180, axis: axis))
             }
-            let tilt = turn(-34, [0, 0, 1]) * turn(24, [1, 0, 0]) * turn(-28, [0, 1, 0])
-            var recenter = matrix_identity_float4x4
-            recenter.columns.3 = SIMD4(-center.x, -center.y, -center.z, 1)
-            var place = matrix_identity_float4x4
-            place.columns.3 = SIMD4(0.42, -0.12, 0, 1)
-            return place * tilt * side * recenter
-        }
+            return turn(-34, [0, 0, 1]) * turn(24, [1, 0, 0]) * turn(-28, [0, 1, 0]) * side
+        }()
 
         func cancelAnimation() {
             animation?.cancel()
