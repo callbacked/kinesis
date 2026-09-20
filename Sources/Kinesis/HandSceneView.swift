@@ -133,9 +133,10 @@ struct HandSceneView: NSViewRepresentable {
 
         func setBackground(dark: Bool) {
             // Composite in SceneKit so the translucent skin keeps its color inside the native view.
+            // The page's own paper color, so the hand floats on it with no box around it.
             scene.background.contents = dark
-                ? NSColor(white: 0.126, alpha: 1)
-                : NSColor(red: 0.987, green: 0.986, blue: 0.981, alpha: 1)
+                ? NSColor(white: 0.085, alpha: 1)
+                : NSColor(red: 0.96, green: 0.955, blue: 0.94, alpha: 1)
             material.setValue(dark ? 1.0 : 0.0, forKey: "darkAppearance")
         }
 

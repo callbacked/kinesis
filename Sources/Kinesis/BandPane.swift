@@ -46,7 +46,6 @@ extension BandModel {
 struct BandPane: View {
     @ObservedObject var model: BandModel
     var openBandPage: () -> Void
-    @State private var bloom = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var unpaired: Bool { model.showsPairAction && !model.pairInProgress }
@@ -83,26 +82,16 @@ struct BandPane: View {
         .background {
             LinearGradient(colors: [KinesisStyle.paneTop, KinesisStyle.paneBottom], startPoint: .top, endPoint: .bottom)
         }
-        .onChange(of: model.gestureCount) { _, _ in
-            // The band felt that: a short bloom for every recognized gesture.
-            guard model.live, !reduceMotion else { return }
-            bloom = true
-            withAnimation(.easeOut(duration: 0.7)) { bloom = false }
-        }
     }
 
     private var band: some View {
         ZStack {
-            Circle().fill(RadialGradient(colors: [KinesisStyle.blue.opacity(0.55), .clear],
-                                         center: .center, startRadius: 4, endRadius: 120))
-                .frame(width: 240, height: 240).opacity(bloom ? 0.9 : 0).blur(radius: 6)
             Circle().fill(RadialGradient(colors: [.white.opacity(model.live ? 0.1 : 0.05), .clear],
                                          center: .center, startRadius: 4, endRadius: 115))
                 .frame(width: 230, height: 230)
             HoldArtwork(hint: model.pairing.holdHint).frame(width: 196, height: 150)
                 .saturation(unpaired ? 0 : 1)
                 .opacity(unpaired ? 0.42 : model.live ? 1 : 0.78)
-                .scaleEffect(bloom ? 1.025 : 1)
         }
         .frame(height: 170)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: model.live)

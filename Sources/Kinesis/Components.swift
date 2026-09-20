@@ -246,24 +246,43 @@ struct Pairing: View {
     }
 }
 
-/// Hands its content the gesture that was just performed, for about a second.
-/// The overview and the gestures page both light the matching row with it.
+/// Counts how often each gesture has fired. Rows watch their own count, so a
+/// gesture never has to interrupt another row's animation.
 struct GestureLight<Content: View>: View {
     @ObservedObject var model: BandModel
-    @ViewBuilder var content: (RecognizedGesture?) -> Content
-    @State private var lit: RecognizedGesture?
+    @ViewBuilder var content: ([RecognizedGesture: Int]) -> Content
+    @State private var fires: [RecognizedGesture: Int] = [:]
+
+    var body: some View {
+        content(fires)
+            .onChange(of: model.gestureCount) { _, _ in
+                guard model.live, let gesture = model.recognizedGesture else { return }
+                fires[gesture, default: 0] += 1
+            }
+    }
+}
+
+/// Flash and decay. A trigger snaps the glow to full at once, then lets it fall
+/// away smoothly. A new trigger just restarts the fall, so it stays smooth at any
+/// speed, and fast gestures leave soft trails instead of fighting each other.
+struct Flash<Content: View>: View {
+    let trigger: Int
+    var held = false
+    @ViewBuilder var content: (Double) -> Content
+    @State private var glow = 0.0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        content(lit)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: lit)
-            .onChange(of: model.gestureCount) { _, _ in lit = model.live ? model.recognizedGesture : nil }
-            .task(id: model.gestureCount) {
-                guard lit != nil else { return }
-                try? await Task.sleep(for: .milliseconds(900))
-                guard !Task.isCancelled else { return }
-                lit = nil
-            }
+        content(held ? 1 : glow)
+            .onChange(of: trigger) { _, _ in fire() }
+            .onChange(of: held) { _, isHeld in if !isHeld { fire() } }
+    }
+
+    private func fire() {
+        var snap = Transaction()
+        snap.disablesAnimations = true
+        withTransaction(snap) { glow = 1 }
+        withAnimation(.easeOut(duration: reduceMotion ? 0.6 : 1.15)) { glow = 0 }
     }
 }
 
@@ -283,7 +302,8 @@ struct OpenRow<Control: View>: View {
     var symbol: String?
     let title: String
     var detail: String?
-    var lit = false
+    /// 0 to 1. The row is blue by this much, as a gesture flashes and fades.
+    var glow = 0.0
     @ViewBuilder var control: Control
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -292,10 +312,12 @@ struct OpenRow<Control: View>: View {
         HStack(alignment: .center, spacing: 14) {
             if let symbol {
                 Image(systemName: symbol).font(.system(size: 14)).frame(width: 22)
-                    .foregroundStyle(lit ? KinesisStyle.blue : KinesisStyle.secondary)
+                    .foregroundStyle(KinesisStyle.secondary)
+                    .overlay(Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(KinesisStyle.blue).opacity(glow))
             }
             VStack(alignment: .leading, spacing: 5) {
-                Text(title).font(.system(size: 15)).foregroundStyle(lit ? KinesisStyle.blue : KinesisStyle.ink)
+                Text(title).font(.system(size: 15)).foregroundStyle(KinesisStyle.ink)
+                    .overlay(alignment: .leading) { Text(title).font(.system(size: 15)).foregroundStyle(KinesisStyle.blue).opacity(glow) }
                 if let detail {
                     Text(detail).font(.system(size: 12.5)).foregroundStyle(KinesisStyle.secondary)
                         .fixedSize(horizontal: false, vertical: true).contentTransition(.opacity)
@@ -305,12 +327,11 @@ struct OpenRow<Control: View>: View {
             control
         }
         .padding(.vertical, detail == nil ? 13 : 15).padding(.horizontal, 14)
-        .background(RoundedRectangle(cornerRadius: 13)
-            .fill(lit ? KinesisStyle.blue.opacity(0.11) : hovered ? KinesisStyle.tray : .clear))
+        .background(RoundedRectangle(cornerRadius: 13).fill(hovered ? KinesisStyle.tray : .clear))
+        .background(RoundedRectangle(cornerRadius: 13).fill(KinesisStyle.blue.opacity(0.13 * glow)))
         // The band bleeds past the text, so titles still line up with the page edge.
         .padding(.horizontal, -14)
         .onHover { hovered = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: hovered)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: lit)
     }
 }
