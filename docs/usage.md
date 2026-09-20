@@ -30,13 +30,13 @@ the meta sign-in happens once, on meta's own page. the band only trusts an owner
 
 turn on **start automatically** under **band** to reconnect and enable controls when kinesis opens. it waits for a live connection and accessibility access. pausing or opening quick setup keeps controls paused for the rest of that run, until you enable them again.
 
-the first launch has a short setup: connect, try a swipe, practice a pinch and turn, and allow mac controls. controls stay paused while you practice; the setup dial never changes your volume or brightness. **quick setup** in the sidebar brings it back anytime. you can skip it too.
+the first launch has a short setup: connect, try a swipe, practice a pinch and turn, and allow mac controls. controls stay paused while you practice; the setup dial never changes your volume or brightness. **quick setup**, the arrow icon at the top right of the window, brings it back anytime. you can skip it too.
 
 choose your hand during setup or under **band**. kinesis reads the band's current setting when it connects. changing hands pauses mac controls, updates the band, and checks the setting again before confirming it. move the band to that wrist, then enable controls when you're ready. swipe directions come directly from the band; the app adjusts its own wrist-turn dial for the selected hand.
 
 **overview** shows your gestures, **gestures** holds the assignments, and **band** has the connection details. the appearance menu switches between light, dark, and your system setting.
 
-the overview keeps a running count of recognized swipes and taps, saved on this mac across launches. duplicate packets and individual dial ticks aren't added to the count.
+the column on the left keeps a running count of recognized swipes and taps, saved on this mac across launches. duplicate packets and individual dial ticks aren't added to the count.
 
 ## controls
 
