@@ -24,18 +24,17 @@ struct MetaLoginView: View {
 
     private var intro: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Eyebrow(text: "one time")
-            Text("sign in with meta.").font(.system(size: 34)).tracking(-1.3).padding(.top, 10)
-            Text("your band belongs to your meta account. claiming it for this Mac needs that account once.")
+            Text("sign in with meta").font(.system(size: 34)).tracking(-1.3)
+            Text("your band is tied to your meta account, so kinesis needs it once to claim the band for this Mac.")
                 .font(.system(size: 14)).foregroundStyle(KinesisStyle.secondary).lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
             VStack(alignment: .leading, spacing: 22) {
-                promise("lock.shield", "you sign in on meta’s own page",
-                        "kinesis opens auth.meta.com and only receives the session that page hands back.")
-                promise("key", "one token, in your keychain",
-                        "it lets kinesis claim your band. you can sign out on the band page whenever you want.")
-                promise("arrow.uturn.backward", "the band stays yours",
-                        "it stays on your meta account. a factory reset releases it from this Mac.")
+                promise("lock.shield", "you sign in on meta’s page",
+                        "kinesis opens auth.meta.com. it gets a session token back, not your password.")
+                promise("key", "token lives in your keychain",
+                        "kinesis uses it to claim your band. forget this band removes it.")
+                promise("arrow.uturn.backward", "your band stays on your account",
+                        "a factory reset on the band undoes all of this.")
             }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
                 .background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 16)).padding(.top, 30)
             Spacer(minLength: 0)

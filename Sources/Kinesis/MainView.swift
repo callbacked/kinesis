@@ -276,9 +276,10 @@ private struct BandSettingsView: View {
         VStack(alignment: .leading, spacing: 24) {
             Text("just you and your band.").font(.system(size: 32)).tracking(-1.2)
             if model.showsPairAction {
+                // Until the band is paired this card is the band: showing both
+                // drew it twice and offered settings that could do nothing yet.
                 PairBandControl(model: model)
-            }
-            if !model.selectedAddress.isEmpty {
+            } else if !model.selectedAddress.isEmpty {
                 bandCard
                 VStack(alignment: .leading, spacing: 0) {
                     SettingRow(title: "band hand", detail: model.handSettingStatus) {
@@ -293,35 +294,23 @@ private struct BandSettingsView: View {
                         Toggle("Start automatically", isOn: $model.startsAutomatically)
                             .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(KinesisStyle.blue)
                     }
-                    Rectangle().fill(KinesisStyle.line).frame(height: 1)
-                    SettingRow(title: "meta account",
-                               detail: model.hasSavedMetaSession ? "signed in. kinesis uses it only to claim a band."
-                                   : "signed out. pairing a new band asks you to sign in once.") {
-                        if model.hasSavedMetaSession {
-                            Button("sign out") { model.signOutOfMeta() }.buttonStyle(KinesisButtonStyle())
-                                .disabled(model.pairInProgress)
-                        }
-                    }
                 }.padding(.horizontal, 18).background(KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 14))
-                PermissionCard(model: model)
             }
+            PermissionCard(model: model)
             HStack(alignment: .firstTextBaseline) {
                 Text("the connection stays on this Mac. no glasses or phone needed.")
                 Spacer(minLength: 16)
                 if !model.selectedAddress.isEmpty {
                     Button("forget this band…") { confirmingForget = true }.buttonStyle(.plain)
-                        .help("removes this band and its key from kinesis.")
+                        .help("removes this band, its key, and your meta sign-in from kinesis.")
                 }
             }.font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
         }
         .confirmationDialog("forget this band?", isPresented: $confirmingForget, titleVisibility: .visible) {
-            Button("forget band", role: .destructive) { model.forgetEverything(keepMetaSession: true) }
-            if model.hasSavedMetaSession {
-                Button("forget band and sign out of meta", role: .destructive) { model.forgetEverything() }
-            }
+            Button("forget band", role: .destructive) { model.forgetEverything() }
             Button("cancel", role: .cancel) {}
         } message: {
-            Text("kinesis removes this band and its key from this Mac. the band stays claimed by your meta account, so you can pair it again.")
+            Text("kinesis removes this band, its key, and your meta sign-in from this Mac. the band stays on your meta account, so you can pair it again.")
         }
     }
 
@@ -332,7 +321,7 @@ private struct BandSettingsView: View {
                 Text(model.bandName.lowercased()).font(.system(size: 21)).tracking(-0.5)
                 ConnectionBadge(live: model.live, text: model.phase)
                 if model.justPaired {
-                    Label("claimed. this band is yours on this Mac.", systemImage: "checkmark.circle.fill")
+                    Label("paired. you’re all set.", systemImage: "checkmark.circle.fill")
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(KinesisStyle.green)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 } else if let battery = model.battery {

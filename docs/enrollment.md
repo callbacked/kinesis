@@ -101,11 +101,9 @@ id, device id, universe, obtained-at time); token material never reaches logs.
   session is driving a claim. it drops only the session (`switchMetaAccount`),
   so the band binds to whichever account signs in next.
 - "forget this band" is one confirmed step (`forgetEverything`): it clears the
-  remembered band and the stored identity. the dialog offers a second choice
-  that also drops the meta session; the plain one keeps it, so pairing again
-  needs no sign-in. the band stays enrolled server-side; pairing again rebinds
-  it. the band page's "meta account" row signs out on its own
-  (`signOutOfMeta`), and is refused while a pair run owns the session.
+  remembered band, the stored identity, and the meta session. the session only
+  exists to claim a band, so it has no control of its own. the band stays
+  enrolled server-side; pairing again rebinds it.
 - the pairing surface (`PairingFlowView`) draws one value,
   `PairingPresentation`, which `BandModel.pairing` derives from the route, the
   enrollment stage, and the failure. it shows four steps (find, sign in,
@@ -114,8 +112,11 @@ id, device id, universe, obtained-at time); token material never reaches logs.
   (`pairFailedStep`) and names it in the headline; the wrong-account failure
   links to meta's factory reset guide. the band artwork calls out the button
   while a run scans and after an empty scan. a run can be cancelled at any
-  stage (`cancelPairing`). all of it hides while the band is connected, busy,
-  or streaming.
+  stage (`cancelPairing`). until the band is paired this card stands in for
+  the band card and the settings rows: a band that was found and never claimed
+  reads "setup incomplete" with its artwork greyed, and one that stopped
+  trusting this mac reads "pair it again". all of it hides while the band is
+  connected, busy, or streaming.
 - macos pairs with an unbonded band when kinesis reads the input channel, and
   that waits on a request the person must accept. a read that stays open for
   1.5 seconds emits `systemPairingPending`: the surface says so, the startup

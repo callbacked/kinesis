@@ -288,19 +288,17 @@ final class BandModel: ObservableObject {
     /// The band page's low-emphasis reset: one confirmed step clears the
     /// remembered band, its stored identity, and the Meta session. The band
     /// stays enrolled server-side; pairing again rebinds it.
-    func forgetEverything(keepMetaSession: Bool = false) {
+    func forgetEverything() {
         cancelEnrollment()
         let address = selectedAddress
         if !address.isEmpty { forgetBand() }
         BandIdentity.delete(for: address)
-        if !keepMetaSession {
-            sessionStore.deleteSession()
-            hasSavedMetaSession = false
-        }
+        sessionStore.deleteSession()
+        hasSavedMetaSession = false
         pairFailure = nil
         pairFailedStep = nil
         emptyScans = 0
-        connectionLog.notice("Forgot the band and its identity; Meta session kept: \(keepMetaSession, privacy: .public)")
+        connectionLog.notice("Forgot the band, its identity, and the Meta session")
     }
 
     /// The privacy escape hatch beside the pairing progress: drops the saved
@@ -324,6 +322,7 @@ final class BandModel: ObservableObject {
         PairingPresentation(PairingInput(
             route: pairRoute, stage: enrollmentStage, failure: pairFailure, failedStep: pairFailedStep,
             emptyScans: emptyScans, hasRememberedBand: !selectedAddress.isEmpty,
+            bandName: selectedAddress.isEmpty ? nil : bandName, identityRejected: hasBandIdentity && bandRejectsIdentity,
             claimedThisRun: claimedThisRun, awaitingSystemPairing: awaitingSystemPairing,
             hasSavedSession: hasSavedMetaSession, canPair: canPair))
     }
@@ -335,13 +334,6 @@ final class BandModel: ObservableObject {
         pairRoute = .none
         claimedThisRun = false
         disconnect()
-    }
-
-    /// Removes the saved Meta session. The band and its key stay.
-    func signOutOfMeta() {
-        guard pairRoute == .none, enrollmentStage == .idle else { return }
-        sessionStore.deleteSession()
-        hasSavedMetaSession = false
     }
 
     /// The whole pipeline behind the band page's one button: scan when

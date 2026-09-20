@@ -946,7 +946,7 @@ private struct FakePairClient: BandPairClient {
     store.saved = MetaSession(accessToken: "token", userID: "1")
     let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
                           pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
-    #expect(model.pairing.headline == "pair it again" && model.pairing.current == nil)
+    #expect(model.pairing.headline == "setup incomplete" && model.pairing.current == nil)
     model.pairBand()
     #expect(model.pairing.current == .claim && model.pairing.claimProgress == 0 && model.pairing.offersAccountSwitch)
     // macOS asks to pair before the band answers anything.
@@ -994,7 +994,7 @@ private struct FakePairClient: BandPairClient {
     await model.shutdown()
 }
 
-@Test @MainActor func cancelPairingEndsARunAndSigningOutKeepsTheBand() async throws {
+@Test @MainActor func cancelPairingEndsARunAtAnyStage() async throws {
     let suite = "kinesis-tests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
@@ -1005,33 +1005,32 @@ private struct FakePairClient: BandPairClient {
                           pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
     model.pairBand()
     #expect(model.pairing.current == .find && connection.requests == ["scan"])
-    // Signing out is refused mid-run; the run owns the session.
-    model.signOutOfMeta()
-    #expect(model.hasSavedMetaSession)
     model.cancelPairing()
     try await waitUntil { !model.busy }
     #expect(!model.pairInProgress && model.pairFailure == nil && model.canPair && model.phase == "Disconnected")
-    model.signOutOfMeta()
-    #expect(!model.hasSavedMetaSession && store.saved == nil)
+    // Cancelling never costs the sign-in: the next run starts without a sheet.
+    #expect(model.hasSavedMetaSession && store.saved != nil)
     await model.shutdown()
 }
 
-@Test @MainActor func forgettingTheBandCanKeepTheMetaSignIn() async throws {
+@Test @MainActor func bailingOutOfTheSignInLeavesAnIncompleteSetupNotALostBand() async throws {
     let suite = "kinesis-tests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
-    let band = "test-\(UUID().uuidString)"
-    defer { BandIdentity.delete(for: band) }
-    defaults.set(try JSONEncoder().encode(BandDevice(address: band, name: "Meta Band")), forKey: "band")
-    try BandIdentity.generate(for: band)
-    let store = SavedSessionStore()
-    store.saved = MetaSession(accessToken: "token", userID: "1")
-    let model = BandModel(defaults: defaults, connection: RecordedConnection(), controls: RecordingControls(),
-                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
-    model.forgetEverything(keepMetaSession: true)
-    #expect(model.selectedAddress.isEmpty && !BandIdentity.exists(for: band))
-    // Pairing again must not need another sign-in.
-    #expect(model.hasSavedMetaSession && store.saved != nil)
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
+                          pairClient: { _ in FakePairClient() }, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.pairBand()
+    connection.send(.devices([BandDevice(address: "found-band", name: "Meta Band 00BC", rssi: -40)]))
+    connection.finish()
+    // The band is found and nothing is saved, so the sign-in sheet opens.
+    try await waitUntil { model.enrollmentStage == .login }
+    #expect(model.pairing.current == .signIn && model.pairing.bandName == "Meta Band 00BC")
+    model.cancelEnrollment()
+    // One card, and it says what is true: found, never claimed.
+    #expect(model.showsPairAction && model.selectedAddress == "found-band" && !model.hasBandIdentity)
+    #expect(model.pairing.headline == "setup incomplete" && model.pairing.dimsArtwork)
+    #expect(model.pairing.bandName == "Meta Band 00BC" && model.pairing.buttonTitle == "pair band")
     await model.shutdown()
 }
 

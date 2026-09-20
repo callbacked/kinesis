@@ -32,8 +32,13 @@ struct PairingFlowView: View {
         HStack(alignment: .top, spacing: 26) {
             if !compact {
                 HoldArtwork(hint: state.holdHint).frame(width: 150, height: 135)
+                    .saturation(state.dimsArtwork ? 0 : 1).opacity(state.dimsArtwork ? 0.45 : 1)
             }
             VStack(alignment: .leading, spacing: 0) {
+                if let name = state.bandName {
+                    Text(name.lowercased()).font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(KinesisStyle.secondary).padding(.bottom, 12)
+                }
                 PairStepper(state: state).padding(.bottom, 20)
                 Text(state.headline).font(.system(size: compact ? 17 : 21)).tracking(-0.5)
                     .foregroundStyle(state.needsSystemPairing ? KinesisStyle.blue : KinesisStyle.ink)

@@ -29,7 +29,7 @@ set your band in pairing mode, hit pair band, and sign in with meta once. allow 
 
 ## why the meta sign-in
 
-the band only trusts an owner that meta has enrolled. kinesis opens meta's own sign-in page once, claims the band for your mac, and keeps the session token in your keychain. it only gets that token, not your password. forget band clears the band's key, and can sign you out too.
+the band only trusts an owner that meta has enrolled. kinesis opens meta's own sign-in page once, claims the band for your mac, and keeps the session token in your keychain. it only gets that token, not your password. forget this band clears the key and the sign-in.
 
 ## build it
 

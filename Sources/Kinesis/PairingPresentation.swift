@@ -23,6 +23,9 @@ struct PairingInput: Equatable {
     var failedStep: PairStep?
     var emptyScans = 0
     var hasRememberedBand = false
+    var bandName: String?
+    /// The band once trusted this Mac and stopped. Without it, a remembered band was never claimed.
+    var identityRejected = false
     var claimedThisRun = false
     var awaitingSystemPairing = false
     var hasSavedSession = false
@@ -50,6 +53,10 @@ struct PairingPresentation: Equatable {
     let needsSystemPairing: Bool
     /// A guide worth opening for this failure, such as Meta's factory reset steps.
     let help: Help?
+    /// The remembered band's name, shown above the steps.
+    let bandName: String?
+    /// The band is drawn grey until a run brings it to life.
+    let dimsArtwork: Bool
 
     struct Help: Equatable {
         let title: String
@@ -59,8 +66,8 @@ struct PairingPresentation: Equatable {
     static let factoryResetGuide = URL(string: "https://www.meta.com/help/ai-glasses/1481163499576351/")!
 
     static let holdInstruction = "hold the band’s button for 3 seconds, until its light flashes."
-    static let systemPairingHeadline = "macOS wants to pair"
-    static let systemPairingDetail = "accept the bluetooth pairing request from macOS. it can hide in the top right corner of your main display."
+    static let systemPairingHeadline = "accept the bluetooth request"
+    static let systemPairingDetail = "macOS is asking to pair with your band. the request can hide in the top right of your main display."
 
     init(_ input: PairingInput) {
         let current = Self.step(for: input)
@@ -70,6 +77,8 @@ struct PairingPresentation: Equatable {
         let reached = current ?? failed
         completed = Set(PairStep.allCases.filter { step in reached.map { step.rawValue < $0.rawValue } ?? false })
         needsSystemPairing = working && input.awaitingSystemPairing
+        bandName = input.hasRememberedBand ? input.bandName : nil
+        dimsArtwork = !working
         offersAccountSwitch = input.route == .enrolling && input.hasSavedSession
         buttonEnabled = input.canPair && !working
 
@@ -83,23 +92,26 @@ struct PairingPresentation: Equatable {
             detail = needsSystemPairing ? Self.systemPairingDetail : "keep it close and on your wrist."
         case .signIn?:
             headline = "sign in with meta"
-            detail = "one sign-in claims your band for this Mac."
+            detail = "sign in once to claim your band."
         case .claim?:
             let (index, text) = Self.claimStage(input.stage.workingText)
             claim = index
             headline = needsSystemPairing ? Self.systemPairingHeadline : "claiming your band"
             detail = needsSystemPairing ? Self.systemPairingDetail : text
         case .ready?:
-            headline = needsSystemPairing ? Self.systemPairingHeadline : "almost there"
-            detail = needsSystemPairing ? Self.systemPairingDetail : "reconnecting with your band’s new key."
+            headline = needsSystemPairing ? Self.systemPairingHeadline : "almost done"
+            detail = needsSystemPairing ? Self.systemPairingDetail : "reconnecting with the new key."
         case nil:
             if let failure = input.failure {
                 let missing = failed == .find && input.emptyScans > 0
                 headline = missing ? "couldn’t find your band" : Self.failureHeadline(failed ?? .find)
                 detail = missing ? Self.holdInstruction + " keep it within arm’s reach, then try again." : failure
-            } else if input.hasRememberedBand {
+            } else if input.hasRememberedBand, input.identityRejected {
                 headline = "pair it again"
-                detail = "your band no longer recognizes this Mac. pairing again takes about a minute."
+                detail = "your band stopped trusting this Mac. pairing again fixes that."
+            } else if input.hasRememberedBand {
+                headline = "setup incomplete"
+                detail = "this band isn’t claimed yet. pair band to finish."
             } else {
                 headline = "pair your band"
                 detail = "kinesis finds your band, signs you in with meta once, and claims it for this Mac."
@@ -135,10 +147,10 @@ struct PairingPresentation: Equatable {
     /// The session reports its ceremony in its own words; people get plainer ones.
     private static func claimStage(_ text: String?) -> (Int, String) {
         switch text {
-        case "reading the band identity": (1, "reading your band’s identity.")
-        case "claiming the band": (2, "asking meta to make it yours.")
-        case "confirming ownership": (3, "confirming with your band.")
-        case "establishing trust": (4, "trading keys with this Mac.")
+        case "reading the band identity": (1, "reading the band.")
+        case "claiming the band": (2, "checking with meta.")
+        case "confirming ownership": (3, "confirming with the band.")
+        case "establishing trust": (4, "swapping keys.")
         case let text?: (2, text + ".")
         case nil: (0, "connecting to your band.")
         }
