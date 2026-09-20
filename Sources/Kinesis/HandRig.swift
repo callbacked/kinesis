@@ -25,19 +25,22 @@ struct HandPose: Equatable {
     static let pinchMiddle = HandPose(index: [8, 14, 8], middle: [48, 56, 28], ring: [26, 32, 16], pinky: [30, 34, 18],
                                       thumbBase: [-33.1, 10.1, -2.1], thumbMiddle: 19.1, thumbEnd: 6.2)
 
-    /// A loose half-curl with the thumb on the side of the index finger. Left and right
-    /// slide the thumb along the finger. Up and down are the thumb's own joints: it
-    /// straightens and lifts above the finger, or curls under it while the index
-    /// comes in to keep contact.
-    static func swipe(index: SIMD3<Float> = [44, 60, 30], _ thumbBase: SIMD3<Float>, _ thumbMiddle: Float, _ thumbEnd: Float) -> HandPose {
-        HandPose(index: index, middle: [50, 66, 32], ring: [54, 70, 34], pinky: [58, 72, 36],
+    /// A loose fist with the thumb's pad on the side of the index finger. Every thumb value
+    /// was solved skin to skin against the rig, so the pad rests on the finger and never
+    /// sinks into it. Left and right slide the pad along the finger.
+    static func swipe(index: SIMD3<Float> = [50, 70, 35], _ thumbBase: SIMD3<Float>, _ thumbMiddle: Float, _ thumbEnd: Float) -> HandPose {
+        HandPose(index: index, middle: [56, 76, 38], ring: [60, 80, 40], pinky: [64, 82, 42],
                  thumbBase: thumbBase, thumbMiddle: thumbMiddle, thumbEnd: thumbEnd)
     }
-    static let swipeCenter = swipe([-24.2, -5.4, -0.6], 14, 22)
-    static let swipeLeft = swipe([-28.0, 4.2, -1.7], 10, 12)
-    static let swipeRight = swipe([-20.6, -17.2, 1.9], 18, 30)
-    static let swipeUp = swipe([-39.2, -3.9, -3.3], 2, 0)
-    static let swipeDown = swipe(index: [52, 70, 36], [-9.0, -6.4, 2.4], 34, 62)
+    static let swipeRest = swipe([-24.2, -4.2, -3.8], 11.0, 10.4)
+    static let swipeLeft = swipe([-25.7, 6.3, -0.2], 8.6, 6.7)
+    static let swipeRight = swipe([-21.9, -14.1, 0.1], 11.0, 19.2)
+    /// Up ends off the finger: the thumb straightens, lifts clear of the fist, and overextends.
+    static let swipeUp = swipe([15.9, -40.0, -25.0], -8.0, -11.5)
+    /// Down curls the thumb in over the side of the finger, and the index comes in to meet it.
+    static let swipeDown = swipe(index: [48.6, 53.0, 26.5], [-6.4, -1.7, 3.0], 35.3, 62.8)
+    /// The thumb reaches up before it comes down, so it goes over the finger and not through it.
+    static let swipeWindup = swipeRest.blended(toward: swipeUp, by: 0.4)
 
     static func swipeEnd(_ direction: SwipeDirection) -> HandPose {
         switch direction {
@@ -48,13 +51,19 @@ struct HandPose: Equatable {
         }
     }
 
+    /// Left and right start from the far end of the finger. Up and down start from rest.
     static func swipeStart(_ direction: SwipeDirection) -> HandPose {
         switch direction {
         case .left: swipeRight
         case .right: swipeLeft
-        case .up: swipeDown
-        case .down: swipeUp
+        case .up, .down: swipeRest
         }
+    }
+
+    /// A swipe acted out: each pose, and how many milliseconds the hand heads for it.
+    static func swipeKeys(_ direction: SwipeDirection) -> [(pose: HandPose, hold: Int)] {
+        let start = swipeStart(direction), end = swipeEnd(direction)
+        return direction == .down ? [(start, 110), (swipeWindup, 130), (end, 340)] : [(start, 150), (end, 330)]
     }
 
     func blended(toward other: HandPose, by amount: Float) -> HandPose {
@@ -239,6 +248,13 @@ struct HandMesh: Decodable {
             high = simd_max(high, SIMD2(seen.x, seen.y))
         }
         return (low, high)
+    }
+
+    /// A joint's position as another joint sees it. Each joint's +y is the back of
+    /// its finger, so this says whether the thumb is above or below a finger.
+    func position(of joint: String, seenFrom frame: String) -> SIMD3<Float>? {
+        guard let joint = indexOf[joint], let frame = indexOf[frame] else { return nil }
+        return bones[frame].simdConvertPosition(bones[joint].simdWorldPosition, from: nil)
     }
 
     /// A joint's position in the hand's own space, under the current pose.

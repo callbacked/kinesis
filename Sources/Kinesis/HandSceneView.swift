@@ -243,10 +243,10 @@ struct HandSceneView: NSViewRepresentable {
                 }
                 switch gesture {
                 case .swipe(let direction):
-                    rig.move(to: .swipeStart(direction))
-                    guard await pause(150) else { return }
-                    rig.move(to: .swipeEnd(direction))
-                    guard await pause(330) else { return }
+                    for key in HandPose.swipeKeys(direction) {
+                        rig.move(to: key.pose)
+                        guard await pause(key.hold) else { return }
+                    }
                 case .tap(let tap):
                     guard !mirrored else { rig.move(to: .relaxed); return }
                     let pinch = tap.finger == "middle" ? HandPose.pinchMiddle : .pinchIndex

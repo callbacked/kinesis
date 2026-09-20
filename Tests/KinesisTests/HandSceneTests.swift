@@ -71,16 +71,37 @@ import KinesisCore
     let start = try #require(rig.position(of: "thumb-tip"))
     rig.snap(to: .swipeEnd(.left))
     #expect(simd_distance(start, try #require(rig.position(of: "thumb-tip"))) > 0.35)
-    // Up and down are the thumb's own joints, not a slide. It straightens to go up and
-    // curls to go down, and the index finger comes in to keep contact on the way down.
-    #expect(HandPose.swipeUp.thumbEnd < 5 && HandPose.swipeDown.thumbEnd > 50)
-    #expect(HandPose.swipeDown.index.y > HandPose.swipeUp.index.y)
+    // The thumb's pad rests on the finger's skin. The joints sit inside the skin, a finger's
+    // and a thumb's radius apart, so a much smaller gap means the thumb has sunk into the finger.
+    func pad() throws -> Float {
+        let tip = try #require(rig.position(of: "thumb-tip"))
+        let bones = try ["index-finger-phalanx-proximal", "index-finger-phalanx-intermediate", "index-finger-phalanx-distal", "index-finger-tip"]
+            .map { try #require(rig.position(of: $0)) }
+        return zip(bones, bones.dropFirst()).map { a, b in
+            let along = simd_clamp(simd_dot(tip - a, b - a) / simd_length_squared(b - a), 0, 1)
+            return simd_distance(tip, a + (b - a) * along)
+        }.min() ?? 0
+    }
+    for pose in [HandPose.swipeRest, .swipeLeft, .swipeRight, .swipeDown] {
+        rig.snap(to: pose)
+        #expect(try (0.27...0.36).contains(pad()))
+    }
+    // Up ends off the finger. The thumb straightens past flat and lifts toward the back of
+    // the hand, which is +z in hand space, well clear of the fist.
+    rig.snap(to: .swipeRest)
+    let rested = try #require(rig.position(of: "thumb-tip"))
+    let restedOnFinger = try #require(rig.position(of: "thumb-tip", seenFrom: "index-finger-phalanx-intermediate"))
     rig.snap(to: .swipeUp)
-    let lifted = try #require(rig.position(of: "thumb-tip"))
+    #expect(try pad() > 0.7 && HandPose.swipeUp.thumbEnd < 0)
+    #expect(try #require(rig.position(of: "thumb-tip")).z > rested.z + 0.8)
+    // Down curls the thumb around the finger toward its palm side. Each joint's +y is the
+    // back of its finger, so the pad ends lower on the finger than it rested.
     rig.snap(to: .swipeDown)
-    let tucked = try #require(rig.position(of: "thumb-tip"))
-    // In hand space +z is the back of the hand, so up ends above down.
-    #expect(lifted.z > tucked.z + 0.3)
+    let tucked = try #require(rig.position(of: "thumb-tip", seenFrom: "index-finger-phalanx-intermediate"))
+    #expect(HandPose.swipeDown.thumbEnd > 50 && tucked.y < 0 && tucked.y < restedOnFinger.y)
+    // The thumb reaches up before it comes down, and every swipe starts and ends on its keys.
+    #expect(HandPose.swipeKeys(.down).map(\.pose) == [.swipeRest, .swipeWindup, .swipeDown])
+    #expect(HandPose.swipeKeys(.up).map(\.pose) == [.swipeRest, .swipeUp])
 }
 
 @Test @MainActor func aNewGestureBendsTheMotionInsteadOfCuttingIt() throws {
