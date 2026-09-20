@@ -6,9 +6,11 @@ import SwiftUI
 /// person has to do with their hands, and what went wrong.
 struct PairBandControl: View {
     @ObservedObject var model: BandModel
-    var compact = false
+    var layout = PairingFlowView.Layout.card
+    var idleHeadline: String?
     var body: some View {
-        PairingFlowView(state: model.pairing, compact: compact, showsButton: compact,
+        PairingFlowView(state: model.pairing, layout: layout, showsButton: layout == .centered,
+                        idleHeadline: idleHeadline,
                         pair: { model.pairBand() }, cancel: { model.cancelPairing() },
                         switchAccount: {
                             // Drop the sign-in that the band refused, then run again: the sheet opens.
@@ -22,36 +24,45 @@ struct PairBandControl: View {
 /// pairing state can be rendered and checked without a band. The sign-in sheet
 /// lives at the window root, so a run can reach it from any page.
 struct PairingFlowView: View {
+    enum Layout { case card, centered }
     let state: PairingPresentation
-    var compact = false
-    /// The band pane carries the pair button in the window. Setup has no pane, so the card does.
+    var layout = Layout.card
+    /// The band pane carries the pair button in the window. Setup has no pane, so the flow does.
     var showsButton = true
+    /// Setup greets a fresh band with its own line instead of "pair your band".
+    var idleHeadline: String?
     var pair: () -> Void = {}
     var cancel: () -> Void = {}
     var switchAccount: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var centered: Bool { layout == .centered }
+    private var headline: String {
+        if let idleHeadline, state.current == nil, state.failed == nil, state.bandName == nil { return idleHeadline }
+        return state.headline
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: 26) {
-            // The band itself lives in the pane and in setup's artwork, never here.
-            VStack(alignment: .leading, spacing: 0) {
-                if let name = state.bandName {
-                    Text(name.lowercased()).font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(KinesisStyle.secondary).padding(.bottom, 12)
-                }
-                PairStepper(state: state).padding(.bottom, 20)
-                Text(state.headline).font(.system(size: compact ? 17 : 21)).tracking(-0.5)
-                    .foregroundStyle(state.needsSystemPairing ? KinesisStyle.blue : KinesisStyle.ink)
-                    .contentTransition(.opacity)
-                Text(state.detail).font(.system(size: 12.5))
-                    .foregroundStyle(state.failed != nil && state.holdHint != .insist ? KinesisStyle.warning : KinesisStyle.secondary)
-                    .lineSpacing(4).fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 8).contentTransition(.opacity)
-                if let progress = state.claimProgress, !state.needsSystemPairing {
-                    ClaimTicks(progress: progress).padding(.top, 14)
-                }
-                HStack(spacing: 14) {
-                    if showsButton {
+        // The band itself lives in the pane and on setup's stage, never here.
+        VStack(alignment: centered ? .center : .leading, spacing: 0) {
+            if let name = state.bandName, !centered {
+                Text(name.lowercased()).font(KinesisType.micro)
+                    .foregroundStyle(KinesisStyle.secondary).padding(.bottom, 12)
+            }
+            PairStepper(state: state).padding(.bottom, centered ? 26 : 20)
+            Text(headline).font(.system(size: centered ? 36 : 21)).tracking(centered ? -1.4 : -0.5)
+                .foregroundStyle(state.needsSystemPairing ? KinesisStyle.blue : KinesisStyle.ink)
+                .multilineTextAlignment(centered ? .center : .leading).contentTransition(.opacity)
+            Text(state.detail).font(.system(size: centered ? 14 : 12.5))
+                .foregroundStyle(state.failed != nil && state.holdHint != .insist ? KinesisStyle.warning : KinesisStyle.secondary)
+                .lineSpacing(centered ? 5 : 4).multilineTextAlignment(centered ? .center : .leading)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: centered ? 460 : nil)
+                .padding(.top, centered ? 12 : 8).contentTransition(.opacity)
+            if let progress = state.claimProgress, !state.needsSystemPairing {
+                ClaimTicks(progress: progress).padding(.top, 14)
+            }
+            HStack(spacing: 14) {
+                if showsButton {
                     Button(action: pair) {
                         HStack(spacing: 9) {
                             if state.working {
@@ -65,21 +76,21 @@ struct PairingFlowView: View {
                     }.buttonStyle(KinesisButtonStyle(prominent: true)).disabled(!state.buttonEnabled)
                     if state.working {
                         Button("cancel", action: cancel).buttonStyle(.plain)
-                            .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
+                            .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
                     }
-                    }
-                    if let help = state.help { GuideLink(title: help.title, url: help.url) }
-                    Spacer(minLength: 0)
-                    if state.offersOtherAccount {
-                        Button("sign in with another account", action: switchAccount).buttonStyle(.plain)
-                            .font(.system(size: 12)).foregroundStyle(KinesisStyle.secondary)
-                            .help("signs out, then pairs again so you can use the account that owns this band.")
-                    }
-                }.padding(.top, showsButton || state.help != nil || state.offersOtherAccount ? 20 : 0)
-            }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let help = state.help { GuideLink(title: help.title, url: help.url) }
+                if !centered { Spacer(minLength: 0) }
+                if state.offersOtherAccount {
+                    Button("sign in with another account", action: switchAccount).buttonStyle(.plain)
+                        .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
+                        .help("signs out, then pairs again so you can use the account that owns this band.")
+                }
+            }.padding(.top, showsButton || state.help != nil || state.offersOtherAccount ? (centered ? 26 : 20) : 0)
         }
-        .padding(compact ? 0 : 24)
-        .background(compact ? Color.clear : KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+        .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
+        .padding(centered ? 0 : 24)
+        .background(centered ? Color.clear : KinesisStyle.surface, in: RoundedRectangle(cornerRadius: 18))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: state)
         .accessibilityElement(children: .contain)
     }

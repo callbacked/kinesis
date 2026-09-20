@@ -67,12 +67,21 @@ private struct AllowedControls: MacControls {
         return model
     }
 
-    let windows: [(String, MainView)] = [
-        ("overview-live", MainView(model: try model(paired: true, live: true), scrolls: false)),
-        ("overview-offline", MainView(model: try model(paired: true, live: false), scrolls: false)),
-        ("gestures", MainView(model: try model(paired: true, live: true), page: .gestures, scrolls: false)),
-        ("band-paired", MainView(model: try model(paired: true, live: true), page: .band, scrolls: false)),
-        ("band-unpaired", MainView(model: try model(paired: false, live: false, trusted: false), page: .band, scrolls: false)),
+    func setup(_ model: BandModel, step: Int) -> some View {
+        SetupView(model: model, step: step).background(KinesisStyle.paper).foregroundStyle(KinesisStyle.ink)
+    }
+
+    let windows: [(String, AnyView)] = [
+        ("overview-live", AnyView(MainView(model: try model(paired: true, live: true), scrolls: false))),
+        ("overview-offline", AnyView(MainView(model: try model(paired: true, live: false), scrolls: false))),
+        ("gestures", AnyView(MainView(model: try model(paired: true, live: true), page: .gestures, scrolls: false))),
+        ("band-paired", AnyView(MainView(model: try model(paired: true, live: true), page: .band, scrolls: false))),
+        ("band-unpaired", AnyView(MainView(model: try model(paired: false, live: false, trusted: false), page: .band, scrolls: false))),
+        ("setup-0-fresh", AnyView(setup(try model(paired: false, live: false, trusted: false), step: 0))),
+        ("setup-0-connected", AnyView(setup(try model(paired: true, live: true), step: 0))),
+        ("setup-1-swipe", AnyView(setup(try model(paired: true, live: true), step: 1))),
+        ("setup-2-turn", AnyView(setup(try model(paired: true, live: true), step: 2))),
+        ("setup-3-ready", AnyView(setup(try model(paired: true, live: true, trusted: false), step: 3))),
     ]
     for (name, window) in windows {
         for (mode, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light), ("dark", .darkAqua, .dark)] {

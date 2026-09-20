@@ -27,8 +27,8 @@ import Testing
                 PairingFlowView(state: PairingPresentation(input))
             }
         }
-        Text("compact, as in setup").font(.system(size: 10, weight: .semibold)).foregroundStyle(KinesisStyle.secondary)
-        PairingFlowView(state: PairingPresentation(PairingInput(route: .scanning)), compact: true).frame(width: 380)
+        Text("centered, as in setup").font(.system(size: 10, weight: .semibold)).foregroundStyle(KinesisStyle.secondary)
+        PairingFlowView(state: PairingPresentation(PairingInput(route: .scanning)), layout: .centered).frame(width: 560)
     }.padding(32).frame(width: 760, alignment: .leading).background(KinesisStyle.paper).foregroundStyle(KinesisStyle.ink)
     let signIn = MetaLoginView(onSession: { _ in }, onCancel: {})
     for (name, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light), ("dark", .darkAqua, .dark)] {
