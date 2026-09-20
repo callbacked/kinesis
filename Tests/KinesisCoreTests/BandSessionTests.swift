@@ -98,6 +98,21 @@ private struct Peer {
         return try session.feed(sender.encrypt(frame), at: 100 + now).events
     }
 
+    /// The band's own clock for `spin`, in microseconds.
+    var stamp: UInt64 = 1_000_000
+
+    /// Keeps motion flowing: one gyro sample every 10 ms, on the band's clock and the Mac's.
+    mutating func spin(from start: Double, through end: Double) throws -> [BandEvent] {
+        var events: [BandEvent] = []
+        var now = start
+        while now <= end + 1e-9 {
+            stamp += 10_000
+            events += try gyro(stamp, now: now)
+            now += 0.01
+        }
+        return events
+    }
+
     mutating func gyro(_ stamp: UInt64, x: Int16 = 1000, now: Double) throws -> [BandEvent] {
         try send(kind: 0x0200020f, payload: BandWire.field(1, stamp) + BandWire.field(2, stamp)
                  + BandWire.field(3, x.littleEndianData + Int16(0).littleEndianData + Int16(0).littleEndianData), now: now)
@@ -382,22 +397,50 @@ private func movement(_ events: [BandEvent]) -> [Double] {
     #expect(first.contains { if case .heartbeat = $0.payload { true } else { false } })
     #expect(engagement(try peer.gesture(1, synthetic: 1, now: 0.01)).isEmpty)
     let press = try peer.gesture(1, now: 0.02)
-    #expect(engagement(press) == [true])
+    // A press alone never arms the dial. A tap is over before a hold begins.
+    #expect(engagement(press).isEmpty)
     guard case .gesture(let gesture) = press[0].payload else { Issue.record("Missing gesture"); return }
     #expect(gesture.finger == "index" && gesture.action == "press" && !gesture.synthetic)
     #expect(gesture.sequence == 10 && gesture.timestampUs == 20 && gesture.receivedAt == 100.02)
     #expect(engagement(try peer.gesture(0, derived: 9, now: 0.021)).isEmpty)
-    let turn = movement(try peer.gyro(1_010_000, now: 0.03))
-    #expect(turn.count == 1)
+    // Held with motion flowing, it arms once the pinch has outlasted a tap, and turns from there.
+    let held = try peer.spin(from: 0.03, through: 0.22)
+    #expect(engagement(held) == [true])
+    // Turns are coalesced to one per 20 ms, so the count is not the point. The first one is.
+    let turn = movement(held)
+    #expect(!turn.isEmpty)
     #expect(abs(try #require(turn.first) - 0.7) < 1e-9)
-    #expect(engagement(peer.session.tick(at: 100.5)) == [false])
-    #expect(movement(try peer.gyro(1_020_000, now: 0.51)).isEmpty)
-    #expect(engagement(try peer.gesture(1, now: 0.52)) == [true])
-    #expect(engagement(try peer.gyro(2_000_000, now: 0.53)) == [false])
-    #expect(movement(try peer.gyro(2_010_000, now: 0.54)).isEmpty)
-    #expect(engagement(try peer.gesture(1, now: 0.55)) == [true])
-    #expect(engagement(try peer.gesture(2, now: 0.56)) == [false])
-    #expect(movement(try peer.gyro(2_020_000, now: 0.57)).isEmpty)
+    // Motion stops arriving: the dial lets go.
+    #expect(engagement(peer.session.tick(at: 100.6)) == [false])
+    #expect(movement(try peer.spin(from: 0.61, through: 0.61)).isEmpty)
+    // A gap in the band's own clock lets go too.
+    #expect(engagement(try peer.gesture(1, now: 0.62)).isEmpty)
+    #expect(engagement(try peer.spin(from: 0.63, through: 0.82)) == [true])
+    peer.stamp += 1_000_000
+    #expect(engagement(try peer.spin(from: 0.83, through: 0.83)) == [false])
+    #expect(movement(try peer.spin(from: 0.84, through: 0.84)).isEmpty)
+    // So does the release.
+    #expect(engagement(try peer.gesture(1, now: 0.85)).isEmpty)
+    #expect(engagement(try peer.spin(from: 0.86, through: 1.05)) == [true])
+    #expect(engagement(try peer.gesture(2, now: 1.06)) == [false])
+    #expect(movement(try peer.spin(from: 1.07, through: 1.07)).isEmpty)
+}
+
+@Test func theTwoPressesOfADoubleTapNeverArmTheDial() throws {
+    var peer = try Peer()
+    _ = try peer.spin(from: 0, through: 0.02)
+    var events: [BandEvent] = []
+    // Two quick pinches with the wrist moving the whole time.
+    for start in [0.03, 0.22] {
+        events += try peer.gesture(1, now: start)
+        events += try peer.spin(from: start + 0.01, through: start + 0.12)
+        events += try peer.gesture(2, now: start + 0.13)
+        events += try peer.spin(from: start + 0.14, through: start + 0.18)
+    }
+    #expect(engagement(events).isEmpty && movement(events).isEmpty)
+    // The same pinch, held, does arm.
+    events = try peer.gesture(1, now: 0.5) + peer.spin(from: 0.51, through: 0.75)
+    #expect(engagement(events) == [true] && !movement(events).isEmpty)
 }
 
 @Test func nativeFramingPreservesSplitMessagesAndRejectsMalformedInput() throws {
@@ -501,9 +544,15 @@ func nativeDecoderMatchesARecordedBandSession() throws {
     _ = try peer.gyro(1_000_000, now: 0.01)
     #expect(engagement(try peer.gesture(0, derived: 9, now: 0.02)).isEmpty)
     #expect(movement(try peer.gyro(1_010_000, now: 0.03)).isEmpty)
-    _ = try peer.gesture(2, now: 0.04)
-    #expect(engagement(try peer.gesture(1, now: 0.05)) == [true])
-    #expect(!movement(try peer.gyro(1_020_000, now: 0.06)).isEmpty)
+    // Held long past the arming delay, the old press still never becomes a pinch.
+    peer.stamp = 1_010_000
+    let stale = try peer.spin(from: 0.04, through: 0.3)
+    #expect(engagement(stale).isEmpty && movement(stale).isEmpty)
+    _ = try peer.gesture(2, now: 0.31)
+    // A press made while motion is flowing does.
+    #expect(engagement(try peer.gesture(1, now: 0.32)).isEmpty)
+    let fresh = try peer.spin(from: 0.33, through: 0.55)
+    #expect(engagement(fresh) == [true] && !movement(fresh).isEmpty)
 }
 
 @Test func unknownRepeatedFieldsDoNotBreakKnownGestureMessages() throws {

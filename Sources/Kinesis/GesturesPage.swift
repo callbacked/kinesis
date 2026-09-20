@@ -13,9 +13,9 @@ struct GesturesPage: View {
             PillTray(options: ["swipe", "tap", "turn"].map { Choice($0, $0) }, selection: family,
                      select: { family = $0 }, label: "Gesture family")
             VStack(alignment: .leading, spacing: 7) {
-                Text(family == "swipe" ? "a shortcut at your fingertips." : family == "tap" ? "one finger. two taps." : "turn it just a little.")
+                Text(family == "swipe" ? "a shortcut at your fingertips." : family == "tap" ? "taps, and one hold." : "turn it just a little.")
                     .font(KinesisType.headline).tracking(-0.4)
-                Text(family == "swipe" ? "slide your thumb across your index finger in any direction." : family == "tap" ? "touch your thumb to your index or middle finger." : "pinch thumb and index, then turn your wrist. release to reset.")
+                Text(family == "swipe" ? "slide your thumb across your index finger in any direction." : family == "tap" ? "tap your thumb to your index or middle finger, or hold it on the middle one." : "pinch thumb and index, then turn your wrist. release to reset.")
                     .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
             }
             GestureLight(model: model) { fires in
@@ -28,7 +28,7 @@ struct GesturesPage: View {
                     }
                 } else if family == "tap" {
                     ForEach(TapGesture.allCases) { tap in
-                        assignment(tap.label, symbol: tap.action == "tap" ? "circle" : "circle.circle", last: tap == TapGesture.allCases.last,
+                        assignment(tap.label, symbol: tap.symbol, last: tap == TapGesture.allCases.last,
                                    trigger: fires[.tap(tap)] ?? 0,
                                    selection: model.tapMappings[tap] ?? .none) { model.tapMappings[tap] = $0 }
                     }
@@ -58,7 +58,7 @@ struct GesturesPage: View {
             .id(family).transition(reduceMotion ? AnyTransition.opacity : AnyTransition(.blurReplace))
             Text(model.live ? "perform a gesture and its row lights up." : "connect your band to try them as you edit.")
                 .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary).padding(.top, -10)
-            Text(family == "swipe" ? "desktop actions use the Mac’s Control + arrow shortcuts. window and tab actions stay in the current app." : family == "tap" ? "single taps start unassigned, leaving room for double taps and the dial." : "volume follows your audio output, including AirPods. brightness controls your Mac’s display; external displays may not respond. pinch again after changing settings.")
+            Text(family == "swipe" ? "desktop actions use the Mac’s Control + arrow shortcuts. window and tab actions stay in the current app." : family == "tap" ? "single taps and the hold start unassigned. holding the index finger is the dial, so only the middle finger has a hold." : "volume follows your audio output, including AirPods. brightness controls your Mac’s display; external displays may not respond. pinch again after changing settings.")
                 .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary).lineSpacing(4)
         }
         .animation(reduceMotion ? nil : KinesisMotion.settle, value: family)

@@ -335,3 +335,14 @@ struct OpenRow<Control: View>: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: hovered)
     }
 }
+
+extension KinesisCore.TapGesture {
+    /// One ring for a tap, two for a double tap, a filled one for a hold.
+    var symbol: String {
+        switch action {
+        case "tap": "circle"
+        case "doubletap": "circle.circle"
+        default: "circle.inset.filled"
+        }
+    }
+}

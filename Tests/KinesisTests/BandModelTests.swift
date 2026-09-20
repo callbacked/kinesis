@@ -1040,6 +1040,50 @@ private struct FakePairClient: BandPairClient {
     await model.shutdown()
 }
 
+@Test @MainActor func lettingGoOfATurnIsNotATap() async throws {
+    let suite = "kinesis-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(true, forKey: "setupCompleted")
+    let connection = RecordedConnection()
+    let controls = RecordingControls()
+    var now = 100.0
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { now })
+    model.selectedAddress = "test-band"
+    model.tapMappings[.indexTap] = .playPause
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    connection.send(.handedness(.right))
+    model.toggleControls()
+    func tap(_ sequence: UInt64) {
+        connection.send(.gesture(BandGesture(sequence: sequence, timestampUs: sequence, finger: "index", action: "press",
+                                             derivedAction: "singleTap", synthetic: false, receivedAt: now)), at: now)
+    }
+    // A pinch that turned, held a while, then let go. The band reports that release as a tap.
+    now = 101
+    connection.send(.dialState(true), at: now)
+    connection.send(.dialTurn(0.4), at: now)
+    now = 103
+    connection.send(.dialState(false), at: now)
+    now = 103.1
+    tap(1)
+    #expect(!controls.actions.contains(.playPause))
+    // A real tap, well after the turn, still works.
+    now = 104.5
+    tap(2)
+    #expect(controls.actions.contains(.playPause))
+    // A pinch that never turned is just a tap.
+    now = 106
+    connection.send(.dialState(true), at: now)
+    now = 106.3
+    connection.send(.dialState(false), at: now)
+    now = 106.4
+    tap(3)
+    #expect(controls.actions.filter { $0 == .playPause }.count == 2)
+    await model.shutdown()
+}
+
 @Test @MainActor func theBandPaneAlwaysOffersTheNextUsefulStep() async throws {
     let suite = "kinesis-tests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))

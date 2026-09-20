@@ -73,7 +73,7 @@ final class BandModel: ObservableObject {
     @Published private(set) var lastAction = "Controls are paused"
     @Published private(set) var dialEngaged = false
     @Published private(set) var pinchedFinger: String?
-    @Published var tapMappings: [TapGesture: MacAction] = [.indexTap: .none, .indexDoubleTap: .playPause, .middleTap: .none, .middleDoubleTap: .mute] {
+    @Published var tapMappings: [TapGesture: MacAction] = [.indexTap: .none, .indexDoubleTap: .playPause, .middleTap: .none, .middleDoubleTap: .mute, .middleHold: .none] {
         didSet {
             defaults.set(Dictionary(uniqueKeysWithValues: tapMappings.map { ($0.key.rawValue, $0.value.rawValue) }), forKey: "tapMappings")
         }
@@ -110,6 +110,9 @@ final class BandModel: ObservableObject {
     private var dialRouter = DialRouter()
     private var dialArmed = false
     private var lastDialAction = -Double.infinity
+    /// Letting go of a turn looks like a tap to the band. These tell the two apart.
+    private var dialTurned = false
+    private var dialEndedAt = -Double.infinity
     private var heartbeat: Double?
     private var started = 0.0
     private var retry: Task<Void, Never>?
@@ -783,7 +786,7 @@ final class BandModel: ObservableObject {
             case .tap(let tap):
                 lastDirection = nil
                 // Releasing a wrist turn must not also trigger an index-tap assignment.
-                guard tap.finger != "index" || now - lastDialAction > 0.6 else { return }
+                guard tap.finger != "index" || (now - lastDialAction > 0.6 && now - dialEndedAt > 0.7) else { return }
                 action = tapMappings[tap] ?? .none
             }
             lastGesture = gesture.label
@@ -798,6 +801,9 @@ final class BandModel: ObservableObject {
             dispatch(action)
         case .dialState(let engaged):
             guard live, pendingHand == nil, abs(now - event.receivedAt) <= 0.35 else { resetDial(); return }
+            // A pinch that turned has just ended: the release is not a tap.
+            if !engaged && dialTurned { dialEndedAt = now }
+            dialTurned = false
             dialEngaged = engaged
             resetDial()
             if dialEngaged && controlsEnabled {
@@ -808,6 +814,7 @@ final class BandModel: ObservableObject {
             guard live, handConfirmed, dialEngaged, abs(now - event.receivedAt) <= 0.35, rotation.isFinite else { return }
             // The same intended turn produced the opposite gyro sign on the left wrist.
             let delta = bandHand == .left ? -rotation : rotation
+            dialTurned = true
             dialTurns.send(delta)
             guard controlsEnabled, dialArmed, dialTarget != .none,
                   dialGate.allows(eventTime: event.receivedAt, now: now, live: live, trusted: controls.trusted) else { return }

@@ -75,7 +75,7 @@ private struct GestureCaption: View {
         if model.dialEngaged { return ("index pinch + ", "turn", "") }
         switch model.recognizedGesture {
         case .swipe(let direction): return ("thumb ", "swipe", " " + direction.rawValue)
-        case .tap(let tap): return (tap.finger + " ", tap.action == "tap" ? "tap" : "double tap", "")
+        case .tap(let tap): return (tap.finger + " ", tap.motion, "")
         case nil: return ("waiting for a ", "gesture", "")
         }
     }
@@ -163,7 +163,7 @@ private struct GestureMap: View {
         for tap in TapGesture.allCases {
             let action = model.tapMappings[tap] ?? .none
             guard action != .none else { continue }
-            rows.append(Entry(id: tap.rawValue, symbol: tap.action == "tap" ? "circle" : "circle.circle",
+            rows.append(Entry(id: tap.rawValue, symbol: tap.symbol,
                               gesture: tap.label.lowercased(), action: action.title.lowercased(), fired: .tap(tap)))
         }
         if model.dialTarget != .none {

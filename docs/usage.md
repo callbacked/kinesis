@@ -50,9 +50,10 @@ everything is selectable in the app. the initial mappings are:
 | index double tap | play / pause |
 | middle double tap | mute / unmute |
 | index or middle single tap | unassigned |
+| middle hold | unassigned |
 | pinch thumb + index, then turn your wrist | volume |
 
-the dial can also control brightness or be turned off. release and pinch again after changing its settings. media controls use the mac's current audio output, including connected airpods. brightness uses the normal brightness keys, so external displays may not respond.
+the dial arms once you have held the pinch for about a fifth of a second, so the two presses of a double tap never turn it. letting go of a turn is not counted as a tap. holding the index finger is the dial, so only the middle finger has a hold you can assign. the dial can also control brightness or be turned off. release and pinch again after changing its settings. media controls use the mac's current audio output, including connected airpods. brightness uses the normal brightness keys, so external displays may not respond.
 
 desktop and mission control actions use the standard control + arrow shortcuts. those need to be enabled in macos keyboard settings, and desktop switching needs another desktop. dismiss sends escape; outside mission control it can dismiss the current view. window and tab shortcuts act within the current app.
 
