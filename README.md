@@ -19,9 +19,7 @@ built on some tinkering i did with astra in [neural-band-poc](https://github.com
 some things may act quirky or not work at all, if that is the case i would love to know why, but this is all highly experimental
 
 ## run it
-**be sure to unpair your band from the meta app before you get started**
-
-a [factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) on the band is a good idea too (hold its button for about 16 seconds), so it starts fresh
+**[factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) your band before you get started** (hold its button for about 16 seconds), so it starts fresh
 
 if this mac was paired with the band before, forget it under system settings › bluetooth too. an old entry there can cause pairing issues
 
