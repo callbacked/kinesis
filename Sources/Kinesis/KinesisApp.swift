@@ -29,9 +29,35 @@ struct KinesisApp: App {
         .defaultSize(width: 980, height: 730)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        MenuBarExtra("Kinesis", systemImage: "waveform") {
+        MenuBarExtra {
             BandMenu(model: delegate.model)
+        } label: {
+            MenuBarLabel(model: delegate.model)
         }
+    }
+}
+
+/// The kinesis mark in the menu bar. It is a template image, so macOS tints it
+/// for light and dark menu bars. It dims while gestures are not reaching the Mac.
+private struct MenuBarLabel: View {
+    @ObservedObject var model: BandModel
+    var body: some View {
+        Image(nsImage: model.live && model.controlsEnabled ? Self.live : Self.idle)
+            .accessibilityLabel(model.live && model.controlsEnabled ? "Kinesis, controls live" : "Kinesis")
+    }
+
+    // Drawn once each. The model publishes on every gesture, and the mark never changes.
+    private static let live = icon(active: true)
+    private static let idle = icon(active: false)
+
+    private static func icon(active: Bool) -> NSImage {
+        let mark = KinesisMark(size: CGSize(width: 20, height: 17), lineWidth: 5.6)
+            .foregroundStyle(.black).opacity(active ? 1 : 0.5)
+        let renderer = ImageRenderer(content: mark)
+        renderer.scale = 3
+        let image = renderer.nsImage ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: nil) ?? NSImage()
+        image.isTemplate = true
+        return image
     }
 }
 
@@ -39,20 +65,30 @@ private struct BandMenu: View {
     @ObservedObject var model: BandModel
     @Environment(\.openWindow) private var openWindow
     var body: some View {
-        Text(model.bandName)
-        Text(model.phase)
-        if let battery = model.battery { Text("Battery \(battery)%") }
+        Text("\(model.bandName.lowercased()) · \(model.phase.lowercased())")
+        if let battery = model.battery { Text("battery \(battery)%") }
         Divider()
-        Button(model.controlsEnabled ? "Pause Mac controls" : "Enable Mac controls") { model.toggleControls() }
-            .disabled(model.showingSetup || (!model.live && !model.controlsEnabled))
-        Button(model.wantsConnection ? "Disconnect band" : "Connect band") {
-            if model.wantsConnection { model.disconnect() } else { model.connect() }
-        }.disabled(model.selectedAddress.isEmpty || (model.busy && !model.wantsConnection))
-        Divider()
-        Button("Open Kinesis") {
-            openWindow(id: "main")
-            NSApp.activate(ignoringOtherApps: true)
+        // The same next step the band's column offers, so the menu never disagrees with the window.
+        switch model.nextAction {
+        case .pair:
+            Button("pair band…") { open() }
+        case .pairing, .connecting:
+            Button(model.nextAction.title) {}.disabled(true)
+        case .connect:
+            Button("connect") { model.connect() }
+        case .enableControls, .pauseControls:
+            Button(model.nextAction.title) { model.toggleControls() }.disabled(model.showingSetup)
         }
-        Button("Quit Kinesis") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        if model.live || model.wantsConnection {
+            Button("disconnect") { model.disconnect() }
+        }
+        Divider()
+        Button("open kinesis") { open() }
+        Button("quit kinesis") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+
+    private func open() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
     }
 }

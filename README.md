@@ -19,11 +19,17 @@ built on some tinkering i did with astra in [neural-band-poc](https://github.com
 some things may act quirky or not work at all, if that is the case i would love to know why, but this is all highly experimental
 
 ## run it
-**be sure to unpair your band from the meta app before you get started**
+**[factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) your band before you get started** (hold its button for about 16 seconds), so it starts fresh
+
+if this mac was paired with the band before, forget it under system settings › bluetooth too. an old entry there can cause pairing issues
 
 [download kinesis](https://github.com/callbacked/kinesis/releases/latest), open the dmg, and drag it into applications. needs macos 14+ and a neural band. works on apple silicon and intel.
 
-set your band in pairing mode, connect, and allow bluetooth + accessibility when prompted. enable controls and you're in.
+set your band in pairing mode, hit pair band, and sign in with meta once. allow bluetooth + accessibility when prompted, and accept the bluetooth pairing request from macos. enable controls and you're in.
+
+## why the meta sign-in
+
+the band only works with an owner that meta has enrolled. the meta ai app does that enrollment when you set up a band, and kinesis does the same enrollment for your mac. it opens meta's own sign-in page once and keeps the session token in your keychain. it only gets that token, not your password. once the band is enrolled, connecting doesn't need meta. forget this band clears the key and the sign-in.
 
 ## build it
 

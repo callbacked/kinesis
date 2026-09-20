@@ -135,3 +135,16 @@ private func gesture(_ sequence: Int, time: Double = 100, action: String = "left
     #expect(router.gesture(from: gesture(1, action: "tap", finger: "index"), now: 100) == .tap(.indexTap))
     #expect(router.gesture(from: gesture(1, action: "tap", finger: "middle"), now: 100) == .tap(.middleTap))
 }
+
+@Test func aMiddleHoldIsAGestureAndAnIndexHoldIsNot() {
+    var router = GestureRouter()
+    func hold(_ finger: String, sequence: UInt64) -> BandGesture {
+        BandGesture(sequence: sequence, timestampUs: sequence, finger: finger, action: "press",
+                    derivedAction: "buttonHold", synthetic: false, receivedAt: 100)
+    }
+    #expect(router.gesture(from: hold("middle", sequence: 1), now: 100) == .tap(.middleHold))
+    // Holding the index finger is the dial, so it never fires an action of its own.
+    #expect(router.gesture(from: hold("index", sequence: 2), now: 100) == nil)
+    #expect(TapGesture.middleHold.label == "Middle hold" && TapGesture.middleHold.finger == "middle")
+    #expect(TapGesture.indexDoubleTap.motion == "double tap" && TapGesture.middleTap.motion == "tap")
+}

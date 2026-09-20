@@ -17,22 +17,26 @@ the script uses your apple development signing identity if exactly one is availa
 
 ## connect
 
-1. stop the old browser console's band connection if it's running.
-2. put your band in pairing mode, click **find band**, select it, then **connect**. it remembers the band afterward.
-3. allow bluetooth when macos asks. grant kinesis accessibility access to send shortcuts.
+1. [factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) your band first (hold its button for about 16 seconds), so it starts fresh.
+2. put your band in pairing mode (hold its button for 3 seconds until it flashes) and click **pair band**. kinesis finds it, signs you in with meta once, and claims it for this mac. it remembers the band afterward.
+3. allow bluetooth when macos asks, and accept the bluetooth pairing request. grant kinesis accessibility access to send shortcuts.
 4. click **enable controls** and try a gesture.
 
-closing the window keeps the connection in the menu bar. pause controls there whenever you want. quitting disconnects the band. the battery reading refreshes while connected.
+closing the window keeps the connection in the menu bar. pause controls there whenever you want. quitting disconnects the band. the battery reading refreshes while connected. the column on the left is your band: its state, battery, and one button that always offers the next step, from **pair band** to **connect** to **enable controls**.
+
+the meta sign-in happens once, on meta's own page. the band only trusts an owner that meta has enrolled, so kinesis needs your account to claim it. the session token lives in your keychain. [enrollment notes](enrollment.md) cover the details.
+
+**forget this band** under **band** clears the band, its key, and your meta sign-in from this mac. a [factory reset](https://www.meta.com/help/ai-glasses/1481163499576351/) on the band is a good idea too, so setup goes smoothly next time: hold its button for about 16 seconds. forget the band under system settings › bluetooth as well. an old entry there can cause pairing issues later. kinesis reminds you of both.
 
 turn on **start automatically** under **band** to reconnect and enable controls when kinesis opens. it waits for a live connection and accessibility access. pausing or opening quick setup keeps controls paused for the rest of that run, until you enable them again.
 
-the first launch has a short setup: connect, try a swipe, practice a pinch and turn, and allow mac controls. controls stay paused while you practice; the setup dial never changes your volume or brightness. **quick setup** in the sidebar brings it back anytime. you can skip it too.
+the first launch has a short setup: connect, try a swipe, practice a pinch and turn, and allow mac controls. controls stay paused while you practice; the setup dial never changes your volume or brightness. **quick setup**, the arrow icon at the top right of the window, brings it back anytime. you can skip it too.
 
 choose your hand during setup or under **band**. kinesis reads the band's current setting when it connects. changing hands pauses mac controls, updates the band, and checks the setting again before confirming it. move the band to that wrist, then enable controls when you're ready. swipe directions come directly from the band; the app adjusts its own wrist-turn dial for the selected hand.
 
 **overview** shows your gestures, **gestures** holds the assignments, and **band** has the connection details. the appearance menu switches between light, dark, and your system setting.
 
-the overview keeps a running count of recognized swipes and taps, saved on this mac across launches. duplicate packets and individual dial ticks aren't added to the count.
+the column on the left keeps a running count of recognized swipes and taps, saved on this mac across launches. duplicate packets and individual dial ticks aren't added to the count.
 
 ## controls
 
@@ -46,9 +50,10 @@ everything is selectable in the app. the initial mappings are:
 | index double tap | play / pause |
 | middle double tap | mute / unmute |
 | index or middle single tap | unassigned |
+| middle hold | unassigned |
 | pinch thumb + index, then turn your wrist | volume |
 
-the dial can also control brightness or be turned off. release and pinch again after changing its settings. media controls use the mac's current audio output, including connected airpods. brightness uses the normal brightness keys, so external displays may not respond.
+the dial arms once you have held the pinch for about a fifth of a second, so the two presses of a double tap never turn it. letting go of a turn is not counted as a tap. holding the index finger is the dial, so only the middle finger has a hold you can assign. the dial can also control brightness or be turned off. release and pinch again after changing its settings. media controls use the mac's current audio output, including connected airpods. brightness uses the normal brightness keys, so external displays may not respond.
 
 desktop and mission control actions use the standard control + arrow shortcuts. those need to be enabled in macos keyboard settings, and desktop switching needs another desktop. dismiss sends escape; outside mission control it can dismiss the current view. window and tab shortcuts act within the current app.
 
@@ -58,7 +63,7 @@ swiftui window and menu bar, corebluetooth for the band connection, and swift de
 
 the app shows which command it sent. that isn't confirmation that another app acted on it. the dial is relative wrist motion, with adjustable sensitivity, rather than a tracked hand pose.
 
-the hand stays still, palm facing you. the thumb and the relevant fingertip light up on a gesture, and stay lit during a pinch. it isn't live finger tracking. the mesh comes from [webxr input profiles](https://github.com/immersive-web/webxr-input-profiles), with its mit notice bundled. `scripts/export-hand.mjs` exports the neutral mesh and fingertip locations. [hand reference notes](hand-references.md) cover the research.
+the hand acts out what the band reports, seen from the thumb side the way meta shows these gestures. it pinches for as long as you hold a pinch, turns around the pinch while you turn the dial, and replays a swipe along the index finger. the thumb and the fingertip it meets light up. sixteen dots circle the hand, one for each electrode on the band; while you turn, the ones your wrist points at light up. with reduce motion on, the hand stays still and only lights up. it isn't live finger tracking: the poses are fixed and the band's events choose between them. the mesh comes from [webxr input profiles](https://github.com/immersive-web/webxr-input-profiles), with its mit notice bundled. `scripts/export-hand.py` exports the mesh with its skeleton: the joints, a parent for each, and four bone weights per vertex. [hand reference notes](hand-references.md) cover the research.
 
 the band uses a background-removed [meta product image published by gizmodo](https://gizmodo.com/metas-smart-glasses-now-have-a-screen-and-a-magic-wristband-2000659760); it isn't a 3d model.
 

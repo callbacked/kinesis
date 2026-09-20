@@ -19,12 +19,41 @@ enum HandViewpoint: Sendable {
     case overview, teaching
 }
 
+/// Offscreen renders cannot draw SceneKit, so the render gallery hands in a picture of the hand.
+private struct HandStandInKey: EnvironmentKey {
+    static let defaultValue: NSImage? = nil
+}
+
+extension EnvironmentValues {
+    var handStandIn: NSImage? {
+        get { self[HandStandInKey.self] }
+        set { self[HandStandInKey.self] = newValue }
+    }
+}
+
+/// The hand on the page: the live scene, or its stand-in when there is one.
+struct HandView: View {
+    let scene: HandSceneView
+    @Environment(\.handStandIn) private var standIn
+    var body: some View {
+        if let standIn { Image(nsImage: standIn).resizable().scaledToFit() } else { scene }
+    }
+}
+
 struct HandSceneView: NSViewRepresentable {
     var hand = BandHand.right
     var highlight = HandHighlight.none
+    /// The gesture to act out when `revision` changes.
+    var gesture: RecognizedGesture?
     var revision = 0
+    /// True while a pinch is held. The hand pinches for exactly as long as you do.
     var sustained = false
+    /// Degrees of wrist roll to show while a pinch is held, for the dial.
+    var roll = 0.0
     var viewpoint = HandViewpoint.overview
+    /// Setup's hand acts out its gesture the moment it appears. Everywhere else the hand
+    /// appears at rest: the last gesture is old news, and it is not replayed.
+    var demonstrates = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
@@ -35,16 +64,18 @@ struct HandSceneView: NSViewRepresentable {
         view.scene = context.coordinator.scene
         view.backgroundColor = .clear
         view.antialiasingMode = .multisampling4X
-        view.preferredFramesPerSecond = 30
+        view.preferredFramesPerSecond = 60
         view.rendersContinuously = false
         view.setAccessibilityElement(false)
+        if !demonstrates { context.coordinator.adopt(highlight, revision: revision) }
         return view
     }
 
     func updateNSView(_ view: SCNView, context: Context) {
         context.coordinator.setBackground(dark: colorScheme == .dark)
         context.coordinator.setHand(hand)
-        context.coordinator.show(highlight, revision: revision, sustained: sustained, animated: !reduceMotion)
+        context.coordinator.show(highlight, gesture: gesture, revision: revision, sustained: sustained,
+                                 roll: Float(roll), animated: !reduceMotion)
     }
 
     static func dismantleNSView(_ view: SCNView, coordinator: Coordinator) {
@@ -53,29 +84,30 @@ struct HandSceneView: NSViewRepresentable {
 
     @MainActor final class Coordinator {
         let scene = SCNScene()
+        let camera = SCNNode()
         private let material = SCNMaterial()
         private let handRoot = SCNNode()
+        private(set) var rig: HandRig?
         private var highlight: HandHighlight?
         private var revision = -1
         private var sustained = false
+        private var releasedAt = -Double.infinity
         private var animation: Task<Void, Never>?
+        private var motion: Task<Void, Never>?
         private(set) var illumination = SIMD3<Float>.zero
 
         init(viewpoint: HandViewpoint = .overview) {
             setBackground(dark: false)
-            let camera = SCNNode()
             camera.camera = SCNCamera()
             camera.camera?.usesOrthographicProjection = true
-            camera.camera?.orthographicScale = viewpoint == .teaching ? 2.05 : 1.9
             camera.position = SCNVector3(0, 0, 10)
             scene.rootNode.addChildNode(camera)
 
             do {
                 let mesh = try HandMesh.load()
-                let hand = SCNNode(geometry: mesh.geometry())
-                hand.name = "hand"
                 material.lightingModel = .constant
                 material.transparencyMode = .singleLayer
+                material.isDoubleSided = true
                 material.shaderModifiers = [.geometry: """
                     #pragma varyings
                     float3 tipInfluence;
@@ -87,33 +119,65 @@ struct HandSceneView: NSViewRepresentable {
                     float indexLight;
                     float middleLight;
                     float darkAppearance;
+                    float3 glowColor;
                     #pragma transparent
                     #pragma body
                     float alongHand = _surface.diffuseTexcoord.y;
-                    float fade = smoothstep(0.02, 0.48, alongHand);
+                    float fade = smoothstep(0.02, 0.4, alongHand);
                     float rim = pow(1.0 - abs(dot(normalize(_surface.normal), normalize(_surface.view))), 2.0);
-                    float shade = 0.48 + 0.52 * max(0.0, dot(normalize(_surface.normal), normalize(float3(-0.4, 0.6, 1.0))));
+                    float shade = 0.5 + 0.5 * max(0.0, dot(normalize(_surface.normal), normalize(float3(-0.4, 0.6, 1.0))));
                     float glow = max(in.tipInfluence.x * thumbLight, max(in.tipInfluence.y * indexLight, in.tipInfluence.z * middleLight));
-                    float3 blue = mix(float3(0.62, 0.83, 0.96), float3(0.34, 0.64, 0.84), smoothstep(0.1, 0.95, alongHand));
-                    float3 lit = mix(float3(0.02, 0.44, 0.95), float3(0.32, 0.80, 1.0), darkAppearance);
-                    _surface.diffuse.rgb = mix(blue * shade, lit, glow);
-                    _surface.diffuse.a = fade * mix(0.64 + 0.14 * rim, 1.0, glow);
+                    // A white hand on the light field: nearly flat, with just enough cool shadow
+                    // and edge to read. On the dark field it is
+                    // porcelain in low light, a few steps above the ground, never a white cutout.
+                    float3 paleLight = mix(float3(0.99, 0.99, 0.992), float3(0.72, 0.745, 0.775), 1.0 - shade);
+                    paleLight *= 1.0 - 0.3 * rim;
+                    float3 paleDark = mix(float3(0.63, 0.655, 0.68), float3(0.215, 0.232, 0.25), 1.0 - shade);
+                    paleDark += 0.10 * rim;
+                    float3 skin = mix(paleLight, paleDark, darkAppearance);
+                    _surface.diffuse.rgb = mix(skin, glowColor, glow * 0.92);
+                    _surface.diffuse.a = fade;
                     """, .fragment: """
                     #pragma transparent
                     #pragma body
-                    _output.color = float4(_surface.diffuse.rgb * _surface.diffuse.a, _surface.diffuse.a);
+                    // The scene is drawn in linear light, but the window blends this view in display
+                    // space. Premultiplying in display space keeps the wrist's fade the hand's own
+                    // colour all the way out. A plain multiply left a bright, hard-edged fringe.
+                    _output.color = float4(_surface.diffuse.rgb * pow(_surface.diffuse.a, 2.2), _surface.diffuse.a);
                     """]
                 setIllumination(.zero)
-                hand.geometry?.materials = [material]
-                // Palm toward the viewer, with every fingertip exposed.
-                hand.eulerAngles = SCNVector3(0, Double.pi, Double.pi / 2 + 0.08)
-                let bounds = hand.boundingBox
-                hand.pivot = SCNMatrix4MakeTranslation(
-                    (bounds.min.x + bounds.max.x) / 2,
-                    (bounds.min.y + bounds.max.y) / 2,
-                    (bounds.min.z + bounds.max.z) / 2)
-                hand.position = SCNVector3(0.18, 0.22, 0)
-                handRoot.addChildNode(hand)
+                let rig = HandRig(mesh: mesh, material: material)
+                self.rig = rig
+                let posed = SCNNode()
+                posed.addChildNode(rig.root)
+                posed.addChildNode(rig.skin)
+                // Frame the relaxed hand with room to spare, so the wrist's fade always
+                // finishes inside the view and no edge ever cuts through the hand.
+                let facing = Self.facing
+                let bounds = rig.visibleBounds(of: mesh, through: facing)
+                let middle = (bounds.low + bounds.high) / 2
+                let reach = max(bounds.high.x - bounds.low.x, bounds.high.y - bounds.low.y)
+                camera.camera?.orthographicScale = Double(reach / 2 / (viewpoint == .teaching ? 0.7 : 0.72))
+                var place = matrix_identity_float4x4
+                place.columns.3 = SIMD4(-middle.x, -middle.y, 0, 1)
+                let view = place * facing
+                posed.simdTransform = view
+                // The dial is a knob held in a pinch, so the hand turns around the
+                // pinch along the forearm's line, and the pinch stays where it is.
+                let pivot = view * SIMD4(HandRig.pinchPoint, 1)
+                let forearm = simd_normalize((view * SIMD4<Float>(0, 1, 0, 0)).xyz)
+                rig.onRoll = { [weak posed] degrees in
+                    guard let posed else { return }
+                    var toPivot = matrix_identity_float4x4, back = matrix_identity_float4x4
+                    toPivot.columns.3 = SIMD4(-pivot.x, -pivot.y, -pivot.z, 1)
+                    back.columns.3 = SIMD4(pivot.x, pivot.y, pivot.z, 1)
+                    let turn = simd_float4x4(simd_quatf(angle: degrees * .pi / 180, axis: forearm))
+                    SCNTransaction.begin()
+                    SCNTransaction.disableActions = true
+                    posed.simdTransform = back * turn * toPivot * view
+                    SCNTransaction.commit()
+                }
+                handRoot.addChildNode(posed)
                 scene.rootNode.addChildNode(handRoot)
             } catch {
                 let text = SCNText(string: "illustration unavailable", extrusionDepth: 0)
@@ -125,27 +189,57 @@ struct HandSceneView: NSViewRepresentable {
             }
         }
 
-        func cancelAnimation() { animation?.cancel() }
+        /// The way Meta shows these gestures: seen from the thumb side, the wrist
+        /// low on the right and the fingers reaching up to the left, so a pinch
+        /// reads in silhouette. In hand space the fingers run along +y, the back
+        /// of the hand faces +z, and the thumb sits toward -x.
+        private static let facing: simd_float4x4 = {
+            // Fingers to the left, the back of the hand up, the thumb side toward the camera.
+            let side = simd_float4x4(columns: (SIMD4(0, 0, -1, 0), SIMD4(-1, 0, 0, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 0, 1)))
+            func turn(_ degrees: Float, _ axis: SIMD3<Float>) -> simd_float4x4 {
+                simd_float4x4(simd_quatf(angle: degrees * .pi / 180, axis: axis))
+            }
+            return turn(-34, [0, 0, 1]) * turn(24, [1, 0, 0]) * turn(-28, [0, 1, 0]) * side
+        }()
+
+        func cancelAnimation() {
+            animation?.cancel()
+            motion?.cancel()
+            rig?.cancel()
+        }
 
         func setHand(_ hand: BandHand) {
             handRoot.scale = SCNVector3(hand == .left ? -1 : 1, 1, 1)
         }
 
         func setBackground(dark: Bool) {
-            // Composite in SceneKit so the translucent skin keeps its color inside the native view.
-            scene.background.contents = dark
-                ? NSColor(white: 0.126, alpha: 1)
-                : NSColor(red: 0.987, green: 0.986, blue: 0.981, alpha: 1)
+            // No ground of its own: the window's field shows through, so the hand floats on it.
+            scene.background.contents = NSColor.clear
             material.setValue(dark ? 1.0 : 0.0, forKey: "darkAppearance")
+            let glow = KinesisStyle.glow(dark: dark)
+            material.setValue(SCNVector3(CGFloat(glow.x), CGFloat(glow.y), CGFloat(glow.z)), forKey: "glowColor")
         }
 
-        func show(_ next: HandHighlight, revision: Int, sustained: Bool, animated: Bool) {
-            guard next != highlight || revision != self.revision || sustained != self.sustained else { return }
-            let releasing = self.sustained && !sustained && revision == self.revision
+        /// Takes the state the hand appears into as already shown, so nothing fires for it.
+        func adopt(_ highlight: HandHighlight, revision: Int) {
+            self.highlight = highlight
+            self.revision = revision
+        }
+
+        func show(_ next: HandHighlight, gesture: RecognizedGesture? = nil, revision: Int, sustained: Bool,
+                  roll: Float = 0, animated: Bool) {
+            let fired = revision != self.revision
+            let held = sustained != self.sustained
+            if sustained, animated { rig?.move(to: pinch(for: next).with(roll: roll)) }
+            guard next != highlight || fired || held else { return }
+            let releasing = self.sustained && !sustained && !fired
+            let now = CACurrentMediaTime()
+            if self.sustained && !sustained { releasedAt = now }
             animation?.cancel()
             highlight = next
             self.revision = revision
             self.sustained = sustained
+            if animated { move(gesture: fired ? gesture : nil, highlight: next, sustained: sustained, held: held, at: now) }
             animation = Task { [weak self] in
                 guard let self else { return }
                 if next == .none || releasing {
@@ -154,9 +248,54 @@ struct HandSceneView: NSViewRepresentable {
                 }
                 await fade(to: next.tips, duration: animated ? 0.08 : 0)
                 guard !Task.isCancelled, !sustained else { return }
-                try? await Task.sleep(for: .milliseconds(220))
+                try? await Task.sleep(for: .milliseconds(260))
                 guard !Task.isCancelled else { return }
-                await fade(to: .zero, duration: animated ? 0.45 : 0)
+                await fade(to: .zero, duration: animated ? 0.5 : 0)
+            }
+        }
+
+        private func pinch(for highlight: HandHighlight) -> HandPose {
+            highlight == .middle ? .pinchMiddle : .pinchIndex
+        }
+
+        /// A held pinch is mirrored as it happens. A tap that was just mirrored is
+        /// not acted out a second time. Swipes have no live signal, so they replay.
+        private func move(gesture: RecognizedGesture?, highlight: HandHighlight, sustained: Bool, held: Bool, at now: Double) {
+            guard let rig else { return }
+            if sustained { motion?.cancel(); return }
+            if held && gesture == nil {
+                motion?.cancel()
+                rig.move(to: .relaxed)
+                return
+            }
+            guard let gesture else { return }
+            let mirrored = now - releasedAt < 0.45
+            motion?.cancel()
+            motion = Task { [weak self] in
+                guard let self, let rig = self.rig else { return }
+                func pause(_ milliseconds: Int) async -> Bool {
+                    try? await Task.sleep(for: .milliseconds(milliseconds))
+                    return !Task.isCancelled
+                }
+                switch gesture {
+                case .swipe(let direction):
+                    for key in HandPose.swipeKeys(direction) {
+                        rig.move(to: key.pose)
+                        guard await pause(key.hold) else { return }
+                    }
+                case .tap(let tap):
+                    guard !mirrored else { rig.move(to: .relaxed); return }
+                    let pinch = tap.finger == "middle" ? HandPose.pinchMiddle : .pinchIndex
+                    rig.move(to: pinch)
+                    guard await pause(150) else { return }
+                    if tap.action != "tap" {
+                        rig.move(to: HandPose.relaxed.blended(toward: pinch, by: 0.4))
+                        guard await pause(110) else { return }
+                        rig.move(to: pinch)
+                        guard await pause(150) else { return }
+                    }
+                }
+                rig.move(to: .relaxed)
             }
         }
 
@@ -172,7 +311,7 @@ struct HandSceneView: NSViewRepresentable {
             }
         }
 
-        private func setIllumination(_ value: SIMD3<Float>) {
+        func setIllumination(_ value: SIMD3<Float>) {
             illumination = value
             SCNTransaction.begin()
             SCNTransaction.disableActions = true
@@ -184,52 +323,14 @@ struct HandSceneView: NSViewRepresentable {
     }
 }
 
-private struct HandMesh: Decodable {
-    let positions: [Float]
-    let normals: [Float]
-    let indices: [Int32]
-    let tips: [String: [Float]]
+private extension SIMD4 where Scalar == Float {
+    var xyz: SIMD3<Float> { SIMD3(x, y, z) }
+}
 
-    static func load() throws -> HandMesh {
-        guard let url = Bundle.kinesis.url(forResource: "hand", withExtension: "json") else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-        let mesh = try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
-        let count = mesh.positions.count / 3
-        guard count > 0, mesh.positions.count.isMultiple(of: 3), mesh.normals.count == mesh.positions.count,
-              mesh.indices.count.isMultiple(of: 3), mesh.indices.allSatisfy({ $0 >= 0 && $0 < count }),
-              ["thumb", "index", "middle"].allSatisfy({ mesh.tips[$0]?.count == 3 }) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        return mesh
-    }
-
-    private static func source(_ values: [Float], semantic: SCNGeometrySource.Semantic, components: Int = 3) -> SCNGeometrySource {
-        SCNGeometrySource(data: values.withUnsafeBytes { Data($0) }, semantic: semantic,
-            vectorCount: values.count / components, usesFloatComponents: true, componentsPerVector: components,
-            bytesPerComponent: 4, dataOffset: 0, dataStride: components * 4)
-    }
-
-    func geometry() -> SCNGeometry {
-        let elements = SCNGeometryElement(data: indices.withUnsafeBytes { Data($0) }, primitiveType: .triangles,
-            primitiveCount: indices.count / 3, bytesPerIndex: 4)
-        let centers = ["thumb", "index", "middle"].map { name in
-            let point = tips[name]!
-            return SIMD3(point[0], point[1], point[2])
-        }
-        var colors: [Float] = []
-        var coordinates: [CGPoint] = []
-        for offset in stride(from: 0, to: positions.count, by: 3) {
-            let vertex = SIMD3(positions[offset], positions[offset + 1], positions[offset + 2])
-            for center in centers {
-                let distance = simd_distance(vertex, center)
-                let t = min(1, max(0, (distance - 0.08) / 0.34))
-                colors.append(1 - t * t * (3 - 2 * t))
-            }
-            colors.append(1)
-            coordinates.append(CGPoint(x: 0, y: Double(max(0, vertex.y) / 3.4143)))
-        }
-        return SCNGeometry(sources: [Self.source(positions, semantic: .vertex), Self.source(normals, semantic: .normal),
-            Self.source(colors, semantic: .color, components: 4), SCNGeometrySource(textureCoordinates: coordinates)], elements: [elements])
+extension HandPose {
+    func with(roll: Float) -> HandPose {
+        var pose = self
+        pose.roll = roll
+        return pose
     }
 }

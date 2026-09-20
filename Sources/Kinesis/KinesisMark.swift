@@ -2,7 +2,7 @@ import SwiftUI
 
 struct KinesisMark: View {
     var size = CGSize(width: 38, height: 36)
-    private static let lineWidth = 3.24
+    var lineWidth = 3.24
     private static let links: [Path] = [-15.0, 0, 15].map { offset in
         let angle = 32.0 * .pi / 180
         let points = (0..<24).map { index in
@@ -23,23 +23,24 @@ struct KinesisMark: View {
         path.closeSubpath()
         return path
     }
-    private static let bounds = links.reduce(CGRect.null) { $0.union($1.boundingRect) }
-        .insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
+    private static let linkBounds = links.reduce(CGRect.null) { $0.union($1.boundingRect) }
 
     var body: some View {
-        Canvas { context, size in
-            let scale = min(size.width / Self.bounds.width, size.height / Self.bounds.height)
-            context.translateBy(x: (size.width - Self.bounds.width * scale) / 2,
-                                y: (size.height - Self.bounds.height * scale) / 2)
+        let lineWidth = lineWidth
+        let bounds = Self.linkBounds.insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
+        return Canvas { context, size in
+            let scale = min(size.width / bounds.width, size.height / bounds.height)
+            context.translateBy(x: (size.width - bounds.width * scale) / 2,
+                                y: (size.height - bounds.height * scale) / 2)
             context.scaleBy(x: scale, y: scale)
-            context.translateBy(x: -Self.bounds.minX, y: -Self.bounds.minY)
+            context.translateBy(x: -bounds.minX, y: -bounds.minY)
             context.drawLayer { layer in
                 for path in Self.links {
                     // Clear the crossing underneath each link without painting a background.
                     layer.blendMode = .destinationOut
-                    layer.stroke(path, with: .color(.black), lineWidth: Self.lineWidth + 2.3)
+                    layer.stroke(path, with: .color(.black), lineWidth: lineWidth * 1.7)
                     layer.blendMode = .normal
-                    layer.stroke(path, with: .foreground, style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round, lineJoin: .round))
+                    layer.stroke(path, with: .foreground, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
                 }
             }
         }.frame(width: size.width, height: size.height).accessibilityHidden(true)

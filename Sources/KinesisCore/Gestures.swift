@@ -27,6 +27,10 @@ public struct BandEvent: Sendable {
         case dialTurn(Double)
         case handedness(BandHand)
         case handednessFailure(String)
+        case ceremonyHTTP(CeremonyHTTPRequest)
+        case ceremonyStage(String)
+        /// The input channel read is waiting on a system Bluetooth pairing request.
+        case systemPairingPending
     }
     public let payload: Payload
     public let receivedAt: Double
@@ -97,7 +101,7 @@ public struct GestureRouter: Sendable {
             gesture = .swipe(direction)
             source = derived[message.derivedAction] == nil ? "raw" : "derived"
         } else {
-            let actions = ["singleTap": "tap", "doubleTap": "doubletap"]
+            let actions = ["singleTap": "tap", "doubleTap": "doubletap", "buttonHold": "hold"]
             let action = actions[message.derivedAction] ?? message.action
             guard let tap = TapGesture.allCases.first(where: { $0.finger == message.finger && $0.action == action }) else { return nil }
             gesture = .tap(tap)
@@ -127,11 +131,20 @@ public enum RecognizedGesture: Hashable, Sendable {
 }
 
 public enum TapGesture: String, CaseIterable, Identifiable, Sendable {
-    case indexTap, indexDoubleTap, middleTap, middleDoubleTap
+    // An index hold is the dial, so only the middle finger has a hold of its own.
+    case indexTap, indexDoubleTap, middleTap, middleDoubleTap, middleHold
     public var id: String { rawValue }
     public var finger: String { self == .indexTap || self == .indexDoubleTap ? "index" : "middle" }
-    public var action: String { self == .indexTap || self == .middleTap ? "tap" : "doubletap" }
-    public var label: String { "\(finger.capitalized) \(action == "tap" ? "tap" : "double tap")" }
+    public var action: String {
+        switch self {
+        case .indexTap, .middleTap: "tap"
+        case .indexDoubleTap, .middleDoubleTap: "doubletap"
+        case .middleHold: "hold"
+        }
+    }
+    /// The motion in plain words: tap, double tap, or hold.
+    public var motion: String { action == "doubletap" ? "double tap" : action }
+    public var label: String { "\(finger.capitalized) \(motion)" }
 }
 
 public enum DialTarget: String, CaseIterable, Identifiable, Sendable {

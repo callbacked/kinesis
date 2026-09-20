@@ -46,9 +46,9 @@ private struct Peer {
     var sender: AirShieldCipher
     var receiver: AirShieldReceiver
     var datax = DataXReceiver()
-    let startup: [DataXFrame]
+    var startup: [DataXFrame] = []
 
-    init() throws {
+    init(completeSetup: Bool = true) throws {
         session = try BandSession()
         let request = try session.request()
         #expect(request.prefix(12) == Data(hex: "806280018100000502000001"))
@@ -78,11 +78,39 @@ private struct Peer {
         var frames: [DataXFrame] = []
         for plain in try receiver.feed(Data(output.dropFirst(size))) { frames += try datax.feed(plain) }
         startup = frames
+        if completeSetup {
+            startup += try exchange(channel: 0x8001, kind: 0x02001000,
+                payload: BandWire.field(1, 1) + BandWire.field(2, Data(repeating: 1, count: 16))).requests
+            startup += try exchange(channel: 3, kind: 0x02000315,
+                payload: BandWire.field(1, 1) + BandWire.field(2, 1) + BandWire.field(4, Data())).requests
+        }
+    }
+
+    mutating func exchange(channel: UInt16, kind: UInt32, payload: Data = Data(), now: Double = 0) throws
+        -> (events: [BandEvent], requests: [DataXFrame]) {
+        let frame = try BandWire.frame(channel: channel, words: [kind], payload: payload)
+        let result = try session.feed(sender.encrypt(frame), at: 100 + now)
+        return (result.events, try requests(result.outgoing))
     }
 
     mutating func send(kind: UInt32, payload: Data, now: Double) throws -> [BandEvent] {
         let frame = try BandWire.frame(channel: kind == 0x02000315 ? 0x5 : 0x8010, words: [kind], payload: payload)
         return try session.feed(sender.encrypt(frame), at: 100 + now).events
+    }
+
+    /// The band's own clock for `spin`, in microseconds.
+    var stamp: UInt64 = 1_000_000
+
+    /// Keeps motion flowing: one gyro sample every 10 ms, on the band's clock and the Mac's.
+    mutating func spin(from start: Double, through end: Double) throws -> [BandEvent] {
+        var events: [BandEvent] = []
+        var now = start
+        while now <= end + 1e-9 {
+            stamp += 10_000
+            events += try gyro(stamp, now: now)
+            now += 0.01
+        }
+        return events
     }
 
     mutating func gyro(_ stamp: UInt64, x: Int16 = 1000, now: Double) throws -> [BandEvent] {
@@ -108,6 +136,106 @@ private struct Peer {
         let result = try session.feed(sender.encrypt(frame), at: 100 + now)
         return (result.events, try requests(result.outgoing))
     }
+}
+
+@Test func startupWaitsForItsLinkAndDeviceInfoBeforeOpeningInput() throws {
+    var peer = try Peer(completeSetup: false)
+    #expect(peer.startup.map(\.channel) == [0x8002, 0x8001])
+    #expect(peer.session.tick(at: 106).isEmpty)
+    let ready = BandWire.field(1, 1) + BandWire.field(2, Data(repeating: 1, count: 16))
+    let unrelated = try peer.exchange(channel: 0x8003, kind: 0x02001000, payload: ready)
+    #expect(unrelated.requests.isEmpty && unrelated.events.isEmpty)
+    let device = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: ready, now: 7)
+    #expect(device.requests.map(\.channel) == [0x8003])
+    #expect(device.events.isEmpty)
+    let duplicate = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: ready, now: 7)
+    #expect(duplicate.requests.isEmpty)
+    for channel: UInt16 in [0x8001, 0x8003] {
+        let closed = try peer.exchange(channel: channel, kind: 0x01000000, now: 7)
+        #expect(closed.events.isEmpty && closed.requests.isEmpty)
+    }
+    let wrongID = try peer.exchange(channel: 3, kind: 0x02000315,
+        payload: BandWire.field(1, 2) + BandWire.field(2, 1), now: 7)
+    #expect(wrongID.requests.isEmpty)
+    let accepted = try peer.exchange(channel: 3, kind: 0x02000315,
+        payload: BandWire.field(1, 1) + BandWire.field(2, 1) + BandWire.field(4, Data()), now: 7)
+    #expect(accepted.requests.map(\.channel) == [0x8005, 0x8005, 0x8006])
+    #expect(accepted.events.isEmpty && !peer.session.streamsEnabled)
+    let repeatedLink = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: ready, now: 7)
+    let repeatedDevice = try peer.exchange(channel: 3, kind: 0x02000315,
+        payload: BandWire.field(1, 1) + BandWire.field(2, 1) + BandWire.field(4, Data()), now: 7)
+    #expect(repeatedLink.requests.isEmpty && repeatedLink.events.isEmpty)
+    #expect(repeatedDevice.requests.isEmpty && repeatedDevice.events.isEmpty)
+    #expect(peer.session.tick(at: 108).isEmpty)
+    #expect(reportedHands(try peer.handReply(id: 1, value: 0, now: 9).events) == [.right])
+}
+
+@Test(arguments: [false, true])
+func startupIgnoresInputUntilDeviceInfoSucceeds(linkReady: Bool) throws {
+    var peer = try Peer(completeSetup: false)
+    if linkReady {
+        _ = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: BandWire.field(1, 1))
+    }
+    #expect(try peer.gyro(1_000_000, now: 0).isEmpty)
+    #expect(try peer.gesture(1, now: 0.01).isEmpty)
+    let orientation = BandWire.field(1, 1) + BandWire.field(2, 1_000_000)
+        + BandWire.field(3, Data(hex: "0000000000000000000000000000803f"))
+    #expect(try peer.send(kind: 0x02000212, payload: orientation, now: 0.02).isEmpty)
+    let flags = BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1)
+    for id: UInt64 in [3, 5] {
+        let premature = try peer.exchange(channel: 5, kind: 0x02000315,
+            payload: BandWire.field(1, id) + BandWire.field(2, 1) + BandWire.field(5, flags))
+        #expect(premature.events.isEmpty && premature.requests.isEmpty)
+    }
+    #expect(!peer.session.streamsEnabled && peer.session.motionMessages == 0)
+    #expect(try peer.session.queryStreamState().isEmpty)
+    if !linkReady {
+        _ = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: BandWire.field(1, 1))
+    }
+    let device = try peer.exchange(channel: 3, kind: 0x02000315,
+        payload: BandWire.field(1, 1) + BandWire.field(2, 1) + BandWire.field(4, Data()))
+    #expect(device.requests.map(\.channel) == [0x8005, 0x8005, 0x8006])
+    let enabled = try peer.exchange(channel: 5, kind: 0x02000315,
+        payload: BandWire.field(1, 3) + BandWire.field(2, 1) + BandWire.field(5, flags))
+    #expect(enabled.events.contains { if case .connected = $0.payload { true } else { false } })
+    #expect(peer.session.streamsEnabled)
+    _ = try peer.gyro(1_010_000, now: 0.03)
+    #expect(peer.session.motionMessages == 1)
+}
+
+@Test func rejectedStartupChannelsFailImmediatelyWithoutReportingReady() throws {
+    var peer = try Peer(completeSetup: false)
+    _ = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: BandWire.field(1, 1))
+    #expect(throws: BandProtocolError.self) {
+        try peer.exchange(channel: 3, kind: 0x0300c001)
+    }
+    #expect(!peer.session.streamsEnabled)
+    var subscribing = try Peer()
+    let unrelated = try subscribing.exchange(channel: 7, kind: 0x0300c001)
+    #expect(unrelated.events.isEmpty && unrelated.requests.isEmpty)
+    #expect(throws: BandProtocolError.self) {
+        try subscribing.exchange(channel: 5, kind: 0x0300c001)
+    }
+    #expect(!subscribing.session.streamsEnabled)
+}
+
+@Test(arguments: [false, true])
+func stoppingDuringSetupNeverOpensAnInputSubscription(linkReady: Bool) throws {
+    var peer = try Peer(completeSetup: false)
+    if linkReady {
+        _ = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: BandWire.field(1, 1))
+    }
+    #expect(try peer.session.stop().isEmpty)
+    let late = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: BandWire.field(1, 1))
+    #expect(late.events.isEmpty && late.requests.isEmpty)
+    let device = try peer.exchange(channel: 3, kind: 0x02000315,
+        payload: BandWire.field(1, 1) + BandWire.field(2, 1) + BandWire.field(4, Data()))
+    #expect(device.events.isEmpty && device.requests.isEmpty)
+    for channel: UInt16 in [3, 5] {
+        let closed = try peer.exchange(channel: channel, kind: 0x0300c001)
+        #expect(closed.events.isEmpty && closed.requests.isEmpty)
+    }
+    #expect(!peer.session.streamsEnabled)
 }
 
 private func reportedHands(_ events: [BandEvent]) -> [BandHand] {
@@ -220,6 +348,41 @@ func nativeHandSelectionWritesOnlyHandednessAndChecksAnIndependentReadback(selec
     #expect(try peer.session.stop().isEmpty)
 }
 
+@Test(arguments: [UInt64(3), 5])
+func lateSubscriptionRepliesDoNotInterruptShutdown(requestID: UInt64) throws {
+    let enabled = BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1)
+    let disabled = BandWire.field(3, 0) + BandWire.field(6, 0) + BandWire.field(8, 0)
+    let replies = [
+        BandWire.field(2, 1) + BandWire.field(5, enabled),
+        BandWire.field(2, 2),
+        BandWire.field(2, 1) + BandWire.field(5, disabled),
+    ]
+    for reply in replies {
+        var peer = try Peer()
+        if requestID == 5 {
+            let ready = try peer.exchange(channel: 5, kind: 0x02000315,
+                payload: BandWire.field(1, 3) + BandWire.field(2, 1) + BandWire.field(5, enabled))
+            #expect(ready.events.contains { if case .connected = $0.payload { true } else { false } })
+            let query = try peer.requests(peer.session.queryStreamState())
+            #expect(!query.isEmpty)
+        }
+        #expect(peer.session.streamsEnabled == (requestID == 5))
+        let stop = try peer.requests(peer.session.stop())
+        #expect(!stop.isEmpty && !peer.session.stopAcknowledged)
+        let late = try BandWire.frame(channel: 5, words: [0x02000315],
+            payload: BandWire.field(1, requestID) + reply)
+        let stopAck = try BandWire.frame(channel: 5,
+            payload: BandWire.field(1, 4) + BandWire.field(2, 1) + BandWire.field(5, disabled))
+        // A late reply must not prevent the following stop acknowledgement in the same record.
+        let result = try peer.session.feed(peer.sender.encrypt(late + stopAck), at: 101)
+        #expect(result.events.isEmpty && result.outgoing.isEmpty)
+        #expect(peer.session.streamsEnabled == (requestID == 5))
+        #expect(peer.session.stopAcknowledged)
+        #expect(try peer.session.queryStreamState().isEmpty)
+        #expect(try peer.session.stop().isEmpty)
+    }
+}
+
 private func engagement(_ events: [BandEvent]) -> [Bool] {
     events.compactMap { if case .dialState(let value) = $0.payload { value } else { nil } }
 }
@@ -234,22 +397,50 @@ private func movement(_ events: [BandEvent]) -> [Double] {
     #expect(first.contains { if case .heartbeat = $0.payload { true } else { false } })
     #expect(engagement(try peer.gesture(1, synthetic: 1, now: 0.01)).isEmpty)
     let press = try peer.gesture(1, now: 0.02)
-    #expect(engagement(press) == [true])
+    // A press alone never arms the dial. A tap is over before a hold begins.
+    #expect(engagement(press).isEmpty)
     guard case .gesture(let gesture) = press[0].payload else { Issue.record("Missing gesture"); return }
     #expect(gesture.finger == "index" && gesture.action == "press" && !gesture.synthetic)
     #expect(gesture.sequence == 10 && gesture.timestampUs == 20 && gesture.receivedAt == 100.02)
     #expect(engagement(try peer.gesture(0, derived: 9, now: 0.021)).isEmpty)
-    let turn = movement(try peer.gyro(1_010_000, now: 0.03))
-    #expect(turn.count == 1)
+    // Held with motion flowing, it arms once the pinch has outlasted a tap, and turns from there.
+    let held = try peer.spin(from: 0.03, through: 0.22)
+    #expect(engagement(held) == [true])
+    // Turns are coalesced to one per 20 ms, so the count is not the point. The first one is.
+    let turn = movement(held)
+    #expect(!turn.isEmpty)
     #expect(abs(try #require(turn.first) - 0.7) < 1e-9)
-    #expect(engagement(peer.session.tick(at: 100.5)) == [false])
-    #expect(movement(try peer.gyro(1_020_000, now: 0.51)).isEmpty)
-    #expect(engagement(try peer.gesture(1, now: 0.52)) == [true])
-    #expect(engagement(try peer.gyro(2_000_000, now: 0.53)) == [false])
-    #expect(movement(try peer.gyro(2_010_000, now: 0.54)).isEmpty)
-    #expect(engagement(try peer.gesture(1, now: 0.55)) == [true])
-    #expect(engagement(try peer.gesture(2, now: 0.56)) == [false])
-    #expect(movement(try peer.gyro(2_020_000, now: 0.57)).isEmpty)
+    // Motion stops arriving: the dial lets go.
+    #expect(engagement(peer.session.tick(at: 100.6)) == [false])
+    #expect(movement(try peer.spin(from: 0.61, through: 0.61)).isEmpty)
+    // A gap in the band's own clock lets go too.
+    #expect(engagement(try peer.gesture(1, now: 0.62)).isEmpty)
+    #expect(engagement(try peer.spin(from: 0.63, through: 0.82)) == [true])
+    peer.stamp += 1_000_000
+    #expect(engagement(try peer.spin(from: 0.83, through: 0.83)) == [false])
+    #expect(movement(try peer.spin(from: 0.84, through: 0.84)).isEmpty)
+    // So does the release.
+    #expect(engagement(try peer.gesture(1, now: 0.85)).isEmpty)
+    #expect(engagement(try peer.spin(from: 0.86, through: 1.05)) == [true])
+    #expect(engagement(try peer.gesture(2, now: 1.06)) == [false])
+    #expect(movement(try peer.spin(from: 1.07, through: 1.07)).isEmpty)
+}
+
+@Test func theTwoPressesOfADoubleTapNeverArmTheDial() throws {
+    var peer = try Peer()
+    _ = try peer.spin(from: 0, through: 0.02)
+    var events: [BandEvent] = []
+    // Two quick pinches with the wrist moving the whole time.
+    for start in [0.03, 0.22] {
+        events += try peer.gesture(1, now: start)
+        events += try peer.spin(from: start + 0.01, through: start + 0.12)
+        events += try peer.gesture(2, now: start + 0.13)
+        events += try peer.spin(from: start + 0.14, through: start + 0.18)
+    }
+    #expect(engagement(events).isEmpty && movement(events).isEmpty)
+    // The same pinch, held, does arm.
+    events = try peer.gesture(1, now: 0.5) + peer.spin(from: 0.51, through: 0.75)
+    #expect(engagement(events) == [true] && !movement(events).isEmpty)
 }
 
 @Test func nativeFramingPreservesSplitMessagesAndRejectsMalformedInput() throws {
@@ -353,9 +544,15 @@ func nativeDecoderMatchesARecordedBandSession() throws {
     _ = try peer.gyro(1_000_000, now: 0.01)
     #expect(engagement(try peer.gesture(0, derived: 9, now: 0.02)).isEmpty)
     #expect(movement(try peer.gyro(1_010_000, now: 0.03)).isEmpty)
-    _ = try peer.gesture(2, now: 0.04)
-    #expect(engagement(try peer.gesture(1, now: 0.05)) == [true])
-    #expect(!movement(try peer.gyro(1_020_000, now: 0.06)).isEmpty)
+    // Held long past the arming delay, the old press still never becomes a pinch.
+    peer.stamp = 1_010_000
+    let stale = try peer.spin(from: 0.04, through: 0.3)
+    #expect(engagement(stale).isEmpty && movement(stale).isEmpty)
+    _ = try peer.gesture(2, now: 0.31)
+    // A press made while motion is flowing does.
+    #expect(engagement(try peer.gesture(1, now: 0.32)).isEmpty)
+    let fresh = try peer.spin(from: 0.33, through: 0.55)
+    #expect(engagement(fresh) == [true] && !movement(fresh).isEmpty)
 }
 
 @Test func unknownRepeatedFieldsDoNotBreakKnownGestureMessages() throws {
@@ -381,11 +578,15 @@ func nativeDecoderMatchesARecordedBandSession() throws {
     #expect(!peer.session.streamsEnabled)
 }
 
-@Test func anotherRPCChannelCannotAcknowledgeTheInputSubscription() throws {
+@Test(arguments: [UInt16(7), 0x8005])
+func anotherRPCChannelCannotAcknowledgeTheInputSubscription(channel: UInt16) throws {
     var peer = try Peer()
-    let unrelated = try BandWire.frame(channel: 7, words: [0x02000315], payload:
-        BandWire.field(1, 5) + BandWire.field(2, 1) + BandWire.field(6, Data()))
-    let events = try peer.session.feed(peer.sender.encrypt(unrelated), at: 100).events
-    #expect(events.isEmpty)
+    let flags = BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1)
+    let payload = BandWire.field(1, 3) + BandWire.field(2, 1) + BandWire.field(5, flags)
+    let unrelated = try peer.exchange(channel: channel, kind: 0x02000315, payload: payload)
+    #expect(unrelated.events.isEmpty && unrelated.requests.isEmpty)
     #expect(!peer.session.streamsEnabled)
+    let accepted = try peer.exchange(channel: 5, kind: 0x02000315, payload: payload)
+    #expect(accepted.events.contains { if case .connected = $0.payload { true } else { false } })
+    #expect(peer.session.streamsEnabled)
 }

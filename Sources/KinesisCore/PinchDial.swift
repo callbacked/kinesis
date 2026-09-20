@@ -1,8 +1,14 @@
 import Foundation
 
 struct PinchDial {
+    /// A tap is over in well under this. Only a pinch that outlasts it is a hold, so
+    /// neither press of a double tap arms the dial.
+    static let armDelay = 0.18
+
     private(set) var engaged = false
     private var pressedAt: [String: Double] = [:]
+    /// A press can only become a pinch if motion was already flowing when it began.
+    private var indexCanArm = false
     private var lastGyroAt: Double?
     private var lastDeviceTime: UInt64?
     private var bias = SIMD3<Double>.zero
@@ -18,6 +24,11 @@ struct PinchDial {
             pressedAt.removeValue(forKey: finger)
             if finger == "index" { release() }
         }
+        if !engaged, indexCanArm, let pressed = pressedAt["index"], now - pressed >= Self.armDelay,
+           let lastGyroAt, now - lastGyroAt < 0.35 {
+            release()
+            engaged = true
+        }
     }
 
     mutating func gesture(_ gesture: BandGesture, now: Double) {
@@ -28,14 +39,14 @@ struct PinchDial {
         let released = gesture.action == "release" || ["buttonRelease", "buttonHoldRelease"].contains(gesture.derivedAction)
         if press, pressedAt[finger] == nil {
             pressedAt[finger] = now
-            if finger == "index", let lastGyroAt, now - lastGyroAt < 0.35 {
-                release()
-                engaged = true
-            }
+            if finger == "index" { indexCanArm = lastGyroAt.map { now - $0 < 0.35 } ?? false }
         }
         if released {
             pressedAt.removeValue(forKey: finger)
-            if finger == "index" { release() }
+            if finger == "index" {
+                indexCanArm = false
+                release()
+            }
         }
     }
 

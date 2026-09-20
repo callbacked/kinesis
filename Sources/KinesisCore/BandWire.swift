@@ -85,10 +85,16 @@ enum BandWire {
     }
 }
 
-struct DataXFrame {
-    let channel: UInt16
-    let words: [UInt32]
-    let payload: Data
+public struct DataXFrame {
+    public let channel: UInt16
+    public let words: [UInt32]
+    public let payload: Data
+
+    public init(channel: UInt16, words: [UInt32], payload: Data) {
+        self.channel = channel
+        self.words = words
+        self.payload = payload
+    }
 }
 
 struct DataXReceiver {
