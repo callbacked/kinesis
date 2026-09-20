@@ -92,13 +92,13 @@ struct FactoryResetReminder: View {
         VStack(alignment: .leading, spacing: 0) {
             BandArtwork().frame(width: 190, height: 150)
                 .frame(maxWidth: .infinity).padding(.bottom, 26)
-            Text("two things left to do").font(.system(size: 26)).tracking(-0.9)
+            Text("two quick things").font(.system(size: 26)).tracking(-0.9)
             VStack(alignment: .leading, spacing: 16) {
                 step(1, "factory reset the band",
-                     "kinesis forgot it, but the band is still claimed by your meta account. to wipe it, \(OwnershipCeremony.factoryResetHint).",
+                     "\(OwnershipCeremony.factoryResetHint). it clears the old owner, so setup goes smoothly next time.",
                      GuideLink(title: "how to factory reset", url: PairingPresentation.factoryResetGuide))
                 step(2, "forget it in bluetooth settings",
-                     "macOS keeps its own entry for the band, and won’t pair with a reset band while that entry is there.",
+                     "an old entry there can cause pairing issues later.",
                      GuideLink(title: "open bluetooth settings", url: NativeBandConnection.bluetoothSettings))
             }.padding(.top, 14)
             Spacer(minLength: 24)
@@ -111,7 +111,7 @@ struct FactoryResetReminder: View {
             }
         }
         .padding(.horizontal, 40).padding(.top, 30).padding(.bottom, 28)
-        .frame(width: 520, height: 560)
+        .frame(width: 520, height: 520)
         .background(KinesisStyle.paper).foregroundStyle(KinesisStyle.ink)
     }
 

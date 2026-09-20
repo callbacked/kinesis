@@ -445,11 +445,11 @@ final class NativeBandConnection: NSObject, BandConnection,
         disconnect()
     }
 
-    /// After a factory reset the band has a new identity key. macOS accepts the pairing
-    /// request and then refuses to keep the pairing, because the band's old entry is still
-    /// in its list ("already paired, with a different irk. Unpair first"). No app can
-    /// remove that entry, so the person has to.
-    static let stalePairingAdvice = "macOS still remembers this band from before it was reset. Remove it under System Settings › Bluetooth, then pair again."
+    /// Seen once, after a factory reset: the band had a new identity key, macOS accepted the
+    /// pairing request, and then dropped the pairing because the band's old entry was still in
+    /// its list ("already paired, with a different irk. Unpair first"). No app can remove that
+    /// entry. The advice stays a suggestion, because one sighting is not a rule.
+    static let stalePairingAdvice = "macOS couldn't finish pairing with your band. If the band has an old entry under System Settings › Bluetooth, forget it there and pair again."
     static let bluetoothSettings = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings")!
 
     /// CoreBluetooth reports a system pairing that went wrong as an ATT security error. The
