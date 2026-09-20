@@ -160,6 +160,21 @@ import KinesisCore
     coordinator.cancelAnimation()
 }
 
+@Test @MainActor func aHandThatAppearsDoesNotReplayTheLastGesture() async throws {
+    let coordinator = HandSceneView.Coordinator()
+    let rig = try #require(coordinator.rig)
+    // The page opens long after a swipe down. The model still remembers it.
+    coordinator.adopt(.index, revision: 7)
+    coordinator.show(.index, gesture: .swipe(.down), revision: 7, sustained: false, animated: true)
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(rig.goal == .relaxed && simd_length(coordinator.illumination) < 0.001)
+    // The next real gesture is acted out as usual.
+    coordinator.show(.index, gesture: .swipe(.up), revision: 8, sustained: false, animated: true)
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(rig.goal == .swipeStart(.up))
+    coordinator.cancelAnimation()
+}
+
 @Test @MainActor func handGlowHoldsUntilReleaseAndNewInputCancelsOldFades() async throws {
     let coordinator = HandSceneView.Coordinator()
     coordinator.show(.index, revision: 1, sustained: false, animated: true)

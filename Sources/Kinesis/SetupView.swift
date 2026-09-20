@@ -204,7 +204,7 @@ struct SetupView: View {
                 // Until the band sends something, the hand acts out the swipe you picked.
                 HandView(scene: HandSceneView(hand: model.bandHand, highlight: model.pinchedFinger.map { $0 == "middle" ? .middle : .index } ?? handHighlight,
                                               gesture: received.isEmpty ? .swipe(preview) : model.recognizedGesture,
-                                              revision: revision, sustained: model.pinchedFinger != nil, viewpoint: .teaching))
+                                              revision: revision, sustained: model.pinchedFinger != nil, viewpoint: .teaching, demonstrates: true))
                 ElectrodeRing(angle: 0, engaged: 0).allowsHitTesting(false)
                 HStack(spacing: 8) {
                     Image(systemName: received.isEmpty ? preview.symbol : "checkmark.circle.fill")

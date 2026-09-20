@@ -51,6 +51,9 @@ struct HandSceneView: NSViewRepresentable {
     /// Degrees of wrist roll to show while a pinch is held, for the dial.
     var roll = 0.0
     var viewpoint = HandViewpoint.overview
+    /// Setup's hand acts out its gesture the moment it appears. Everywhere else the hand
+    /// appears at rest: the last gesture is old news, and it is not replayed.
+    var demonstrates = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
@@ -64,6 +67,7 @@ struct HandSceneView: NSViewRepresentable {
         view.preferredFramesPerSecond = 60
         view.rendersContinuously = false
         view.setAccessibilityElement(false)
+        if !demonstrates { context.coordinator.adopt(highlight, revision: revision) }
         return view
     }
 
@@ -214,6 +218,12 @@ struct HandSceneView: NSViewRepresentable {
             material.setValue(dark ? 1.0 : 0.0, forKey: "darkAppearance")
             let glow = KinesisStyle.glow(dark: dark)
             material.setValue(SCNVector3(CGFloat(glow.x), CGFloat(glow.y), CGFloat(glow.z)), forKey: "glowColor")
+        }
+
+        /// Takes the state the hand appears into as already shown, so nothing fires for it.
+        func adopt(_ highlight: HandHighlight, revision: Int) {
+            self.highlight = highlight
+            self.revision = revision
         }
 
         func show(_ next: HandHighlight, gesture: RecognizedGesture? = nil, revision: Int, sustained: Bool,
