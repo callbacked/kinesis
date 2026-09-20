@@ -3,18 +3,29 @@ import Foundation
 import Testing
 @testable import Kinesis
 
-@Test @MainActor func aRefusedReadIsPairingAndAnythingElseIsAFailure() {
-    // After a factory reset macOS still holds the old bond. The band refuses it, the read
-    // fails with a security error, and macOS asks to pair again. That is not yet a failure.
-    for code in [CBATTError.insufficientEncryption, .insufficientAuthentication, .insufficientAuthorization] {
-        let refused = NSError(domain: CBATTErrorDomain, code: code.rawValue)
-        #expect(NativeBandConnection.isPairingError(refused))
-        #expect(NativeBandConnection.explainingPairing(refused).localizedDescription.contains("accept the Bluetooth request"))
+@Test @MainActor func aPairingThatWentWrongGetsAdviceThatFitsItsCause() {
+    func advice(_ code: CBATTError.Code) -> String {
+        NativeBandConnection.explainingPairing(NSError(domain: CBATTErrorDomain, code: code.rawValue)).localizedDescription
     }
+    // The request was accepted and macOS still refused the pairing: after a factory reset
+    // the band's old entry is in the way, and only the person can remove it.
+    #expect(advice(.insufficientEncryption) == NativeBandConnection.stalePairingAdvice)
+    #expect(NativeBandConnection.stalePairingAdvice.contains("System Settings › Bluetooth"))
+    // The request was missed or declined.
+    #expect(advice(.insufficientAuthentication).contains("accept the Bluetooth request"))
+    #expect(advice(.insufficientAuthorization).contains("accept the Bluetooth request"))
+    // Anything else is passed on as it is.
     let other = NSError(domain: CBATTErrorDomain, code: CBATTError.invalidHandle.rawValue)
-    #expect(!NativeBandConnection.isPairingError(other))
-    #expect(!NativeBandConnection.isPairingError(NSError(domain: CBErrorDomain, code: CBError.connectionTimeout.rawValue)))
     #expect((NativeBandConnection.explainingPairing(other) as NSError) == other)
-    // One open request, and room for macOS to ask a second time after its own 30 seconds.
-    #expect(NativeBandConnection.pairingWindow > 30)
+    let timeout = NSError(domain: CBErrorDomain, code: CBError.connectionTimeout.rawValue)
+    #expect((NativeBandConnection.explainingPairing(timeout) as NSError) == timeout)
+}
+
+@Test @MainActor func aStalePairingOffersTheWayToBluetoothSettings() {
+    var input = PairingInput()
+    input.failure = NativeBandConnection.stalePairingAdvice.lowercased()
+    input.failedStep = .claim
+    let stale = PairingPresentation(input)
+    #expect(stale.help?.title == "open bluetooth settings" && stale.help?.url == NativeBandConnection.bluetoothSettings)
+    #expect(stale.headline == "couldn’t claim your band" && !stale.offersOtherAccount)
 }

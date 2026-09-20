@@ -127,9 +127,19 @@ id, device id, universe, obtained-at time); token material never reaches logs.
   connected, busy, or streaming.
 - macos pairs with an unbonded band when kinesis reads the input channel, and
   that waits on a request the person must accept. a read that stays open for
-  1.5 seconds emits `systemPairingPending`: the surface says so, the startup
-  deadline extends to cover the 30-second pairing window, and a security error
-  from that read is reworded into what to do next.
+  1.5 seconds emits `systemPairingPending`: the surface says so, and the startup
+  deadline extends to cover the 30-second pairing window.
+- a factory reset gives the band a new identity key (irk). macos still shows the
+  pairing request, and after it is accepted refuses to keep the pairing:
+  bluetoothd logs "already paired, with a different irk. unpair first", the
+  read fails with att error 15, and the band hangs up 30 seconds later when its
+  own pairing timer runs out. nothing on the app's side of the link can fix
+  that, so the fix is on the forget side: `forgetEverything` removes the mac's
+  own entry for the band by name (`SystemPairing`, the unpublished
+  `IOBluetoothDevice.remove` that blueutil also uses; tests never get the real
+  one). if that fails, the reset reminder adds a second step with a link to
+  bluetooth settings. att error 15 is reworded into the same advice with the
+  same link; errors 5 and 8 keep the "accept the request" advice.
 - the sign-in sheet opens on a short preface (why, what is stored, how to undo
   it) and contacts meta only after "continue to meta". while the page is up
   the sheet shows its current host.

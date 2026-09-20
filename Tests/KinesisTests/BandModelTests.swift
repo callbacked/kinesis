@@ -49,8 +49,13 @@ import KinesisCore
 }
 
 @MainActor private func waitUntil(_ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(10)
-    while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+    // Counts its own turns, not the wall clock. When the machine stalls, the work this waits
+    // for stalls with it, and a wall-clock deadline then expires before that work could run.
+    var turns = 0
+    while !condition(), turns < 2000 {
+        try await Task.sleep(for: .milliseconds(5))
+        turns += 1
+    }
     #expect(condition())
 }
 
@@ -1158,14 +1163,17 @@ private struct FakePairClient: BandPairClient {
     let store = SavedSessionStore()
     store.saved = MetaSession(accessToken: "token", userID: "1")
     let connection = RecordedConnection()
+    var unpairedNames: [String] = []
     let model = BandModel(defaults: defaults, connection: connection, controls: RecordingControls(),
-                          pairClient: { _ in FakePairClient() }, sessionStore: store, clock: { 100 })
+                          pairClient: { _ in FakePairClient() }, sessionStore: store,
+                          forgetSystemPairing: { unpairedNames.append($0); return true }, clock: { 100 })
     model.connect()
     connection.send(.connected)
     connection.send(.heartbeat)
     try await waitUntil { model.live }
     #expect(model.hasBandIdentity && model.hasSavedMetaSession && !model.showsPairAction)
-    model.forgetEverything()
+    // The Mac's own pairing goes too, by the band's name, and forget says that it went.
+    #expect(model.forgetEverything() && unpairedNames == ["Meta Band"])
     #expect(model.selectedAddress.isEmpty && model.devices.isEmpty && !model.live)
     #expect(!model.hasBandIdentity && !BandIdentity.exists(for: band))
     #expect(!model.hasSavedMetaSession && store.saved == nil)

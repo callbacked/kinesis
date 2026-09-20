@@ -120,8 +120,13 @@ struct PairingPresentation: Equatable {
             }
         }
         claimProgress = claim
-        help = current == nil && input.failure?.contains("factory reset") == true
-            ? Help(title: "how to factory reset", url: Self.factoryResetGuide) : nil
+        if current == nil, input.failure?.contains("factory reset") == true {
+            help = Help(title: "how to factory reset", url: Self.factoryResetGuide)
+        } else if current == nil, input.failure == NativeBandConnection.stalePairingAdvice.lowercased() {
+            help = Help(title: "open bluetooth settings", url: NativeBandConnection.bluetoothSettings)
+        } else {
+            help = nil
+        }
         buttonTitle = working ? "pairing…" : input.failure != nil ? "try again" : "pair band"
         if input.route == .scanning { holdHint = .prompt }
         else if current == nil, input.emptyScans > 0 { holdHint = .insist }

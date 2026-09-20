@@ -7,6 +7,7 @@ struct BandPage: View {
     @ObservedObject var model: BandModel
     @State private var confirmingForget = false
     @State private var remindingToReset = false
+    @State private var macStillPaired = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 30) {
@@ -48,8 +49,8 @@ struct BandPage: View {
         }
         .confirmationDialog("forget this band?", isPresented: $confirmingForget, titleVisibility: .visible) {
             Button("forget band", role: .destructive) {
-                model.forgetEverything()
                 // Kinesis has let go; the band has not. Say so while it is the next thing to do.
+                macStillPaired = !model.forgetEverything()
                 remindingToReset = true
             }
             Button("cancel", role: .cancel) {}
@@ -57,7 +58,7 @@ struct BandPage: View {
             Text("this clears the band, its key, and your meta sign-in from this Mac.")
         }
         .sheet(isPresented: $remindingToReset) {
-            FactoryResetReminder { remindingToReset = false }
+            FactoryResetReminder(macStillPaired: macStillPaired) { remindingToReset = false }
         }
     }
 }
@@ -86,27 +87,49 @@ struct PermissionRow: View {
 /// Shown right after a band is forgotten. Forgetting clears the Mac's side only;
 /// the band stays claimed until its own button wipes it.
 struct FactoryResetReminder: View {
+    /// True when macOS kept its own pairing for the band, so removing it is a second step.
+    var macStillPaired = false
     var done: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             BandArtwork().frame(width: 190, height: 150)
                 .frame(maxWidth: .infinity).padding(.bottom, 26)
             Text("now factory reset the band").font(.system(size: 26)).tracking(-0.9)
-            Text("kinesis forgot it, but the band is still claimed by your meta account. to wipe it, \(OwnershipCeremony.factoryResetHint).")
-                .font(KinesisType.body).foregroundStyle(KinesisStyle.secondary).lineSpacing(5)
-                .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
-            GuideLink(title: "how to factory reset", url: PairingPresentation.factoryResetGuide).padding(.top, 14)
+            VStack(alignment: .leading, spacing: 16) {
+                step(macStillPaired ? 1 : nil, "factory reset the band",
+                     "kinesis forgot it, but the band is still claimed by your meta account. to wipe it, \(OwnershipCeremony.factoryResetHint).",
+                     GuideLink(title: "how to factory reset", url: PairingPresentation.factoryResetGuide))
+                if macStillPaired {
+                    step(2, "remove it from this Mac’s bluetooth",
+                         "macOS kept its own entry for the band, and refuses to pair with a reset band while that entry exists.",
+                         GuideLink(title: "open bluetooth settings", url: NativeBandConnection.bluetoothSettings))
+                }
+            }.padding(.top, 14)
             Spacer(minLength: 24)
             HStack(spacing: 14) {
                 Spacer()
                 Button("not now", action: done).buttonStyle(.plain)
                     .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
-                Button("i’ve reset it", action: done).buttonStyle(KinesisButtonStyle(prominent: true))
+                Button("done", action: done).buttonStyle(KinesisButtonStyle(prominent: true))
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(.horizontal, 40).padding(.top, 34).padding(.bottom, 28)
-        .frame(width: 520, height: 470)
+        .padding(.horizontal, 40).padding(.top, 30).padding(.bottom, 28)
+        .frame(width: 520, height: macStillPaired ? 560 : 470)
         .background(KinesisStyle.paper).foregroundStyle(KinesisStyle.ink)
+    }
+
+    private func step(_ number: Int?, _ title: String, _ detail: String, _ link: GuideLink) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            if let number {
+                Text("\(number)").font(KinesisType.label).monospacedDigit().foregroundStyle(KinesisStyle.secondary)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                if number != nil { Text(title).font(KinesisType.lead) }
+                Text(detail).font(KinesisType.body).foregroundStyle(KinesisStyle.secondary).lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                link.padding(.top, 3)
+            }
+        }
     }
 }
