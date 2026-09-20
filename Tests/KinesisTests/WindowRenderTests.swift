@@ -151,7 +151,7 @@ private struct AllowedControls: MacControls {
             let standIn = try hand(dark: scheme == .dark, teaching: name.hasPrefix("setup"), pinching: name.hasSuffix("turning"))
             NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
                 let renderer = ImageRenderer(content: window.frame(width: size.width, height: size.height).environment(\.colorScheme, scheme)
-                    .environment(\.handStandIn, standIn))
+                    .environment(\.handStandIn, standIn).environment(\.motionless, true))
                 renderer.scale = 1.5
                 if let image = renderer.cgImage {
                     png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])

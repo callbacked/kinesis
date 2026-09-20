@@ -16,6 +16,14 @@ struct AppearanceMenu: View {
     var compact = false
     @AppStorage("appearance") private var appearance = AppAppearance.system
     var body: some View {
+        if compact {
+            menu.buttonStyle(KinesisIconStyle())
+        } else {
+            menu.buttonStyle(KinesisPressStyle())
+        }
+    }
+
+    private var menu: some View {
         Menu {
             ForEach(AppAppearance.allCases) { option in
                 Button { appearance = option } label: {
@@ -33,7 +41,7 @@ struct AppearanceMenu: View {
                     Image(systemName: "chevron.down").font(.system(size: 9))
                 }.font(.system(size: 12))
             }
-        }.menuStyle(.button).buttonStyle(KinesisPressStyle()).menuIndicator(.hidden)
+        }.menuStyle(.button).menuIndicator(.hidden)
             .fixedSize(horizontal: compact, vertical: true).accessibilityLabel("Appearance")
     }
 }
@@ -106,8 +114,8 @@ struct KinesisButtonStyle: ButtonStyle {
             .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
             .contentShape(Capsule())
             .scaleEffect(reduceMotion || !enabled ? 1 : configuration.isPressed ? 0.975 : 1)
-            .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.8), value: configuration.isPressed)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: hovered)
+            .animation(reduceMotion ? nil : KinesisMotion.press, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : KinesisMotion.settle, value: hovered)
             .onHover { hovered = $0 }
     }
 }
@@ -126,7 +134,27 @@ struct KinesisPressStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
             .opacity(configuration.isPressed ? 0.78 : 1)
-            .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.82), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : KinesisMotion.press, value: configuration.isPressed)
+    }
+}
+
+/// A bare icon in the top bar. Under the pointer it gets a soft round tray.
+struct KinesisIconStyle: ButtonStyle {
+    /// The quick setup arrow winds back a little under the pointer, the way it will wind setup back.
+    var winds = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .rotationEffect(.degrees(winds && hovered && !reduceMotion ? -45 : 0))
+            .frame(width: 30, height: 30)
+            .background(Circle().fill(hovered ? KinesisStyle.tray : .clear))
+            .contentShape(Circle())
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
+            .opacity(configuration.isPressed ? 0.78 : 1)
+            .animation(reduceMotion ? nil : KinesisMotion.press, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : KinesisMotion.select, value: hovered)
+            .onHover { hovered = $0 }
     }
 }
 

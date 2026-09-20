@@ -9,15 +9,15 @@ struct GesturesPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            Text("little moves. your rules.").font(KinesisType.title).tracking(-1.2)
+            Text("little moves. your rules.").font(KinesisType.title).tracking(-1.2).reveal(0)
             PillTray(options: ["swipe", "tap", "turn"].map { Choice($0, $0) }, selection: family,
-                     select: { family = $0 }, label: "Gesture family")
+                     select: { family = $0 }, label: "Gesture family").reveal(1)
             VStack(alignment: .leading, spacing: 7) {
                 Text(family == "swipe" ? "a shortcut at your fingertips." : family == "tap" ? "taps, and one hold." : "turn it just a little.")
                     .font(KinesisType.headline).tracking(-0.4)
                 Text(family == "swipe" ? "slide your thumb across your index finger in any direction." : family == "tap" ? "tap your thumb to your index or middle finger, or hold it on the middle one." : "pinch thumb and index, then turn your wrist. release to reset.")
                     .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
-            }
+            }.reveal(2)
             GestureLight(model: model) { fires in
             VStack(spacing: 2) {
                 if family == "swipe" {
@@ -55,11 +55,12 @@ struct GesturesPage: View {
                 }
             }
             }
-            .id(family).transition(reduceMotion ? AnyTransition.opacity : AnyTransition(.blurReplace))
+            // A new family's rows arrive the same way a page does.
+            .reveal(3).id(family).transition(.asymmetric(insertion: .identity, removal: .opacity.animation(.easeOut(duration: 0.1))))
             Text(model.live ? "perform a gesture and its row lights up." : "connect your band to try them as you edit.")
-                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary).padding(.top, -10)
+                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary).padding(.top, -10).reveal(4)
             Text(family == "swipe" ? "desktop actions use the Mac’s Control + arrow shortcuts. window and tab actions stay in the current app." : family == "tap" ? "single taps and the hold start unassigned. holding the index finger is the dial, so only the middle finger has a hold." : "volume follows your audio output, including AirPods. brightness controls your Mac’s display; external displays may not respond. pinch again after changing settings.")
-                .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary).lineSpacing(4)
+                .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary).lineSpacing(4).reveal(5)
         }
         .animation(reduceMotion ? nil : KinesisMotion.settle, value: family)
     }

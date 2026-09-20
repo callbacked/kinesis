@@ -36,7 +36,7 @@ import Testing
                              ("reset-reminder", AnyView(FactoryResetReminder(done: {})))] {
             var png: Data?
             NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
-                let renderer = ImageRenderer(content: view.environment(\.colorScheme, scheme))
+                let renderer = ImageRenderer(content: view.environment(\.colorScheme, scheme).environment(\.motionless, true))
                 renderer.scale = 2
                 if let image = renderer.cgImage {
                     png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])

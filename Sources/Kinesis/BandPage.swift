@@ -10,10 +10,10 @@ struct BandPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 30) {
-            Text("just you and your band.").font(KinesisType.title).tracking(-1.2)
+            Text("just you and your band.").font(KinesisType.title).tracking(-1.2).reveal(0)
             if model.showsPairAction {
                 // Until the band is paired, pairing is the whole page.
-                PairBandControl(model: model)
+                PairBandControl(model: model).reveal(1)
             } else if !model.selectedAddress.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     SectionLabel(text: "band").padding(.bottom, 6)
@@ -23,7 +23,7 @@ struct BandPage: View {
                                  select: { model.selectHand($0) }, label: "Band hand")
                             .disabled(!model.canChangeHand)
                     }
-                }
+                }.reveal(1)
             }
             VStack(alignment: .leading, spacing: 4) {
                 SectionLabel(text: "this Mac").padding(.bottom, 6)
@@ -34,17 +34,17 @@ struct BandPage: View {
                     }
                 }
                 PermissionRow(model: model)
-            }
+            }.reveal(2)
             if !model.selectedAddress.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     OpenRow(title: "forget this band",
                             detail: "clears the band, its key, and your meta sign-in from this Mac.") {
                         Button("forget…") { confirmingForget = true }.buttonStyle(KinesisButtonStyle())
                     }
-                }
+                }.reveal(3)
             }
             Text("the connection stays on this Mac. no glasses or phone needed.")
-                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.85))
+                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.85)).reveal(4)
         }
         .confirmationDialog("forget this band?", isPresented: $confirmingForget, titleVisibility: .visible) {
             Button("forget band", role: .destructive) {

@@ -140,15 +140,15 @@ private struct PairStepper: View {
 private struct StepDot: View {
     enum Mark { case upcoming, current, done, failed }
     let mark: Mark
-    @State private var pulsing = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         ZStack {
             switch mark {
             case .upcoming:
                 Circle().strokeBorder(KinesisStyle.line, lineWidth: 1.5)
             case .current:
-                Circle().fill(KinesisStyle.accent.opacity(0.22)).scaleEffect(pulsing ? 1.9 : 1).opacity(pulsing ? 0 : 1)
+                Pulse { beat in
+                    Circle().fill(KinesisStyle.accent.opacity(0.22)).scaleEffect(1 + 0.9 * beat).opacity(1 - beat)
+                }
                 Circle().fill(KinesisStyle.accent).padding(3)
             case .done:
                 Circle().fill(KinesisStyle.green)
@@ -159,14 +159,6 @@ private struct StepDot: View {
             }
         }
         .frame(width: 13, height: 13)
-        .onAppear { animate() }
-        .onChange(of: mark) { _, _ in animate() }
-    }
-
-    private func animate() {
-        pulsing = false
-        guard mark == .current, !reduceMotion else { return }
-        withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { pulsing = true }
     }
 }
 
@@ -188,8 +180,6 @@ private struct ClaimTicks: View {
 /// The band, with its button called out while the person has to hold it.
 struct HoldArtwork: View {
     let hint: PairingPresentation.HoldHint
-    @State private var ringing = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         BandArtwork()
             .overlay {
@@ -197,24 +187,19 @@ struct HoldArtwork: View {
                     // The button sits on the capsule under the top arc of the product image.
                     let center = CGPoint(x: geometry.size.width * 0.5, y: geometry.size.height * 0.25)
                     ZStack {
-                        Circle().stroke(KinesisStyle.accent.opacity(0.85), lineWidth: 1.5)
-                            .frame(width: 26, height: 26)
-                            .scaleEffect(ringing ? 2.1 : 0.7).opacity(ringing ? 0 : 1)
+                        Pulse(active: hint != .none) { beat in
+                            Circle().stroke(KinesisStyle.accent.opacity(0.85), lineWidth: 1.5)
+                                .frame(width: 26, height: 26)
+                                .scaleEffect(0.7 + 1.4 * beat).opacity(1 - beat)
+                        }
                         Circle().fill(KinesisStyle.accent).frame(width: 7, height: 7)
                             .shadow(color: KinesisStyle.accent.opacity(0.9), radius: 6)
                     }
                     .position(center)
                     .opacity(hint == .none ? 0 : 1)
+                    .animation(KinesisMotion.settle, value: hint == .none)
                 }
             }
-            .onAppear { animate() }
-            .onChange(of: hint) { _, _ in animate() }
             .accessibilityLabel(hint == .none ? "Meta Neural Band" : "Hold the button on the band")
-    }
-
-    private func animate() {
-        ringing = false
-        guard hint != .none, !reduceMotion else { return }
-        withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { ringing = true }
     }
 }

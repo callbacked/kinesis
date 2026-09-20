@@ -32,7 +32,7 @@ struct SetupView: View {
             header
             Spacer(minLength: 10)
             stage.frame(height: 292)
-                .id(step).transition(reduceMotion ? AnyTransition.opacity : AnyTransition(.blurReplace))
+                .id(step).transition(.rise(moves: !reduceMotion))
             Group {
                 if step == 0 && !model.live {
                     PairBandControl(model: model, layout: .centered, idleHeadline: "your mac. in good hands.")

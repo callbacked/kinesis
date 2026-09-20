@@ -49,6 +49,8 @@ struct BandPane: View {
     var openBandPage: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
+    /// 0 the moment the band connects, then 1: one ring leaves the band and fades.
+    @State private var greeting = 1.0
 
     private var unpaired: Bool { model.showsPairAction && !model.pairInProgress }
 
@@ -92,13 +94,24 @@ struct BandPane: View {
             Ellipse().fill(.black.opacity(scheme == .dark ? 0.55 : 0.22))
                 .frame(width: 124, height: 10).blur(radius: 11).offset(y: 76)
                 .opacity(unpaired ? 0.4 : 1)
+            // Connecting happens once in a while, so it can afford one moment of its own.
+            Ellipse().stroke(KinesisStyle.accent, lineWidth: 1.5)
+                .frame(width: 176, height: 112)
+                .scaleEffect(0.92 + 0.55 * greeting).opacity(0.55 * (1 - greeting))
             HoldArtwork(hint: model.pairing.holdHint).frame(width: 196, height: 150)
                 .saturation(unpaired ? 0 : 1)
                 .opacity(unpaired ? 0.42 : model.live ? 1 : 0.8)
         }
         .frame(height: 170)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: model.live)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: unpaired)
+        .animation(reduceMotion ? nil : KinesisMotion.calm, value: model.live)
+        .animation(reduceMotion ? nil : KinesisMotion.calm, value: unpaired)
+        .onChange(of: model.live) { _, live in
+            guard live, !reduceMotion else { return }
+            var snap = Transaction()
+            snap.disablesAnimations = true
+            withTransaction(snap) { greeting = 0 }
+            withAnimation(.easeOut(duration: 1.2)) { greeting = 1 }
+        }
     }
 
     private var state: some View {
@@ -122,7 +135,14 @@ struct BandPane: View {
         return model.phase.lowercased()
     }
 
-    @ViewBuilder private var notice: some View {
+    private var notice: some View {
+        let lowBattery = model.live && (model.battery ?? 100) <= 15
+        return noticeContent
+            .animation(reduceMotion ? nil : KinesisMotion.enter, value: model.awaitingSystemPairing)
+            .animation(reduceMotion ? nil : KinesisMotion.enter, value: lowBattery)
+    }
+
+    @ViewBuilder private var noticeContent: some View {
         if model.awaitingSystemPairing {
             PaneNotice(symbol: "hand.tap", text: "accept the bluetooth request", tint: KinesisStyle.accent)
         } else if model.live, let battery = model.battery, battery <= 15 {
@@ -195,31 +215,23 @@ private struct PaneNotice: View {
         .padding(.horizontal, 13).frame(height: 30)
         .background(tint.opacity(0.1), in: Capsule())
         .overlay(Capsule().strokeBorder(tint.opacity(0.35)))
-        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        .transition(.opacity.combined(with: .offset(y: -4)))
         .accessibilityElement(children: .combine)
     }
 }
 
-/// A state dot that breathes while something is in progress.
+/// A state dot that breathes while something is in progress, on the shared heartbeat.
 struct PulseDot: View {
     let color: Color
     let pulsing: Bool
-    @State private var out = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        ZStack {
-            Circle().fill(color.opacity(0.35)).scaleEffect(out ? 2.6 : 1).opacity(out ? 0 : 1)
-            Circle().fill(color)
+        Pulse(active: pulsing) { beat in
+            ZStack {
+                Circle().fill(color.opacity(0.35)).scaleEffect(1 + 1.6 * beat).opacity(1 - beat)
+                Circle().fill(color)
+            }
         }
         .frame(width: 6, height: 6)
-        .onAppear { animate() }
-        .onChange(of: pulsing) { _, _ in animate() }
         .accessibilityHidden(true)
-    }
-
-    private func animate() {
-        out = false
-        guard pulsing, !reduceMotion else { return }
-        withAnimation(.easeOut(duration: 1.3).repeatForever(autoreverses: false)) { out = true }
     }
 }

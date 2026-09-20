@@ -13,11 +13,11 @@ struct OverviewPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            stage
-            GestureMap(model: model)
-            if model.live && !model.accessibilityAllowed { PermissionRow(model: model) }
+            stage.reveal(0)
+            GestureMap(model: model).reveal(1)
+            if model.live && !model.accessibilityAllowed { PermissionRow(model: model).reveal(2) }
             Text("close this window. kinesis stays in your menu bar.")
-                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.8))
+                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.8)).reveal(3)
         }
         .onReceive(model.dialTurns) { delta in
             let ticks = dialRouter.turn(delta: delta, sensitivity: model.dialSensitivity,

@@ -59,14 +59,15 @@ struct MainView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 22) {
             // First, where it is seen without scrolling, even in the smallest window.
-            if let error = model.error { ErrorNote(text: error).transition(.opacity) }
+            if let error = model.error { ErrorNote(text: error).transition(.opacity.combined(with: .offset(y: -6))) }
             Group {
                 switch page {
                 case .overview: OverviewPage(model: model)
                 case .gestures: GesturesPage(model: model)
                 case .band: BandPage(model: model)
                 }
-            }.id(page).transition(reduceMotion ? AnyTransition.opacity : AnyTransition(.blurReplace))
+            // The old page leaves at once. The new one arrives part by part, from the top.
+            }.id(page).transition(.asymmetric(insertion: .identity, removal: .opacity.animation(.easeOut(duration: 0.1))))
         }
         .animation(reduceMotion ? nil : KinesisMotion.settle, value: model.error)
         .frame(maxWidth: 760, alignment: .leading)
@@ -75,15 +76,15 @@ struct MainView: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 6) {
             TextTabs(options: AppPage.allCases.map { Choice($0, $0.rawValue) }, selection: $page)
             Spacer()
             AppearanceMenu(compact: true).foregroundStyle(KinesisStyle.secondary)
             Button { model.beginSetup() } label: {
                 Image(systemName: "arrow.counterclockwise").font(.system(size: 14))
-            }.buttonStyle(KinesisPressStyle()).foregroundStyle(KinesisStyle.secondary)
+            }.buttonStyle(KinesisIconStyle(winds: true)).foregroundStyle(KinesisStyle.secondary)
                 .help("run quick setup again").accessibilityLabel("Quick setup")
-        }.padding(.horizontal, 38).padding(.top, 36)
+        }.padding(.leading, 38).padding(.trailing, 30).padding(.top, 36)
     }
 
     private func open(_ next: AppPage) {

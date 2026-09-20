@@ -14,10 +14,88 @@ enum KinesisType {
     static let micro = Font.system(size: 11, weight: .medium)
 }
 
+/// Every motion in the app is one of these. Nothing bounces, and nothing moves without a cause.
 enum KinesisMotion {
+    /// A press: quick and firm.
+    static let press = Animation.spring(response: 0.22, dampingFraction: 0.86)
     /// Selection capsules, tab indicators, and the switch knob share one spring.
-    static let select = Animation.spring(response: 0.3, dampingFraction: 0.82)
+    static let select = Animation.spring(response: 0.32, dampingFraction: 0.84)
+    /// A change of state in colour or opacity.
     static let settle = Animation.easeOut(duration: 0.22)
+    /// Something that arrives. It rises into place and does not bounce.
+    static let enter = Animation.spring(response: 0.5, dampingFraction: 0.92)
+    /// A slow change of mood: the band waking up, or going dim.
+    static let calm = Animation.easeInOut(duration: 0.5)
+    /// Seconds in one beat of anything that waits.
+    static let beat = 1.8
+}
+
+/// Offscreen renders have no clock and no appearance events. They turn motion off, and
+/// every view draws the way it ends up.
+private struct MotionlessKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var motionless: Bool {
+        get { self[MotionlessKey.self] }
+        set { self[MotionlessKey.self] = newValue }
+    }
+}
+
+/// How a thing looks before it has arrived: a little low, a little soft, not yet there.
+private struct Arrival: ViewModifier {
+    let arrived: Bool
+    let moves: Bool
+    func body(content: Content) -> some View {
+        content.opacity(arrived ? 1 : 0).offset(y: arrived || !moves ? 0 : 10).blur(radius: arrived || !moves ? 0 : 4)
+    }
+}
+
+/// A page arrives in order. Each part rises into focus a beat after the part above it.
+private struct Reveal: ViewModifier {
+    let order: Int
+    @State private var shown = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.motionless) private var motionless
+
+    func body(content: Content) -> some View {
+        content.modifier(Arrival(arrived: shown || motionless, moves: !reduceMotion))
+            .onAppear { withAnimation(KinesisMotion.enter.delay(Double(order) * 0.05)) { shown = true } }
+    }
+}
+
+extension View {
+    func reveal(_ order: Int) -> some View { modifier(Reveal(order: order)) }
+}
+
+extension AnyTransition {
+    /// One thing replaces another. The old one leaves at once, and the new one rises into focus.
+    static func rise(moves: Bool) -> AnyTransition {
+        .asymmetric(insertion: .modifier(active: Arrival(arrived: false, moves: moves), identity: Arrival(arrived: true, moves: moves)),
+                    removal: .opacity.animation(.easeOut(duration: 0.1)))
+    }
+}
+
+/// One heartbeat for everything that waits. Every pulse reads the same clock, so two of
+/// them on screen beat together and never against each other. The value eases from 0 to 1.
+struct Pulse<Content: View>: View {
+    var active = true
+    @ViewBuilder var content: (Double) -> Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.motionless) private var motionless
+
+    var body: some View {
+        if active && !reduceMotion && !motionless {
+            TimelineView(.animation) { timeline in
+                let phase = timeline.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: KinesisMotion.beat) / KinesisMotion.beat
+                content(1 - pow(1 - phase, 3))
+            }
+        } else {
+            content(0)
+        }
+    }
 }
 
 /// One option in a tray, a menu, or the tabs.
@@ -187,6 +265,7 @@ struct TextTabs<Value: Hashable>: View {
     let options: [Choice<Value>]
     @Binding var selection: Value
     @Namespace private var tabs
+    @State private var hovered: Value?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -197,7 +276,8 @@ struct TextTabs<Value: Hashable>: View {
                     withAnimation(reduceMotion ? nil : KinesisMotion.select) { selection = option.value }
                 } label: {
                     Text(option.title).font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(chosen ? KinesisStyle.ink : KinesisStyle.secondary)
+                        .foregroundStyle(chosen || hovered == option.value ? KinesisStyle.ink : KinesisStyle.secondary)
+                        .opacity(chosen || hovered != option.value ? 1 : 0.8)
                         .padding(.vertical, 9)
                         .overlay(alignment: .bottom) {
                             if chosen {
@@ -207,9 +287,11 @@ struct TextTabs<Value: Hashable>: View {
                         }
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                    .onHover { inside in hovered = inside ? option.value : (hovered == option.value ? nil : hovered) }
                     .accessibilityAddTraits(chosen ? .isSelected : [])
             }
-        }.accessibilityElement(children: .contain).accessibilityLabel("Pages")
+        }.animation(KinesisMotion.settle, value: hovered)
+            .accessibilityElement(children: .contain).accessibilityLabel("Pages")
     }
 }
 
