@@ -60,6 +60,11 @@ struct BandPane: View {
             HStack(spacing: 9) {
                 KinesisMark(size: CGSize(width: 25, height: 23))
                 Text("kinesis").font(.system(size: 16, weight: .medium, design: .rounded)).tracking(-0.5)
+                #if KINESIS_DEV
+                Text("dev").font(KinesisType.micro).foregroundStyle(KinesisStyle.accent)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Capsule().fill(KinesisStyle.accent.opacity(0.14)))
+                #endif
                 Spacer()
             }.foregroundStyle(KinesisStyle.ink.opacity(0.9)).padding(.top, 46)
 

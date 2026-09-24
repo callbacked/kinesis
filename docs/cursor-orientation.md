@@ -72,6 +72,6 @@ the orientation stream runs only while the cursor, calibration, or the readings 
 ## developer tools
 
 - `open -n --env KINESIS_MOTION_LOG=/path/motion.jsonl dist/Kinesis.app` writes every gyro, orientation, and gesture event with both clocks, one JSON object per line.
-- `KINESIS_LAB=1 ./scripts/build.sh` adds the practice lab: a full-screen field with targets, moving targets, and drags. open it from the cursor page or the menu bar. each run saves its motion log, pointer events, trials, and settings to `~/Library/Application Support/Kinesis/Lab`. every run of a mode shows the same targets.
+- `./scripts/build.sh --dev` makes a dev build, which adds the practice lab and calibration. the lab is a full-screen field with targets, moving targets, and drags. open it from the cursor page or the menu bar. each run saves its motion log, pointer events, trials, and settings to `~/Library/Application Support/Kinesis/Lab`. every run of a mode shows the same targets.
 - `scripts/lab-compare.py` prints lab runs side by side: hits, times, misses, straightness, overshoot, and drift.
 - `scripts/pointer-lab.sh` replays a motion log or scripted moves through the real cursor, one display frame at a time, at any refresh rate. it compares playback delays and tunings, and it measures uneven frames, lag, jumps at a press, flick overshoot, and drift. a replay can't show how a person reacts to a changed pointer, so live lab runs decide.

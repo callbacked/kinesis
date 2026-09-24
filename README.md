@@ -46,7 +46,7 @@ cd kinesis
 open dist/Kinesis.app
 ```
 
-quit kinesis before rebuilding.
+quit kinesis before rebuilding. `./scripts/build.sh --dev` builds the same app with experiments and developer tools in it.
 
 ## license
 

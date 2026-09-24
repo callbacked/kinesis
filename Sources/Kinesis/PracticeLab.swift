@@ -1,8 +1,8 @@
-#if KINESIS_LAB
+#if KINESIS_DEV
 import AppKit
 import SwiftUI
 
-// A developer tool, only in builds made with KINESIS_LAB=1: a full-screen practice
+// A developer tool, only in dev builds (./scripts/build.sh --dev): a full-screen practice
 // field for the air cursor. Each run saves the band's motion, every pointer event,
 // and every trial to its own folder, so a run can be read and replayed later with
 // scripts/pointer-lab.sh.

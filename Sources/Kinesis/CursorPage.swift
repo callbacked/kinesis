@@ -58,7 +58,7 @@ struct CursorPage: View {
                     .buttonStyle(KinesisButtonStyle())
             }
 
-            #if KINESIS_LAB
+            #if KINESIS_DEV
             OpenRow(title: "calibrate", detail: model.pointerCalibrated
                         ? String(format: "lab · %.0f pt/°, tilt %.2f", model.cursorSpeed, model.pointerReach.upTilt) : "lab") {
                 HStack(spacing: 14) {

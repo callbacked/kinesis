@@ -6,7 +6,7 @@
     scripts/lab-compare.py --last 6        the six newest runs
 
 Runs live in ~/Library/Application Support/Kinesis/Lab. A run comes from the lab
-screen in a build made with KINESIS_LAB=1 ./scripts/build.sh.
+screen in a dev build: ./scripts/build.sh --dev.
 """
 import bisect
 import json
