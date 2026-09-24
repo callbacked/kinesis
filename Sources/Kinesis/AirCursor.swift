@@ -446,11 +446,14 @@ struct PointerReach: Codable, Equatable {
     /// Elevation per compass degree when the arm moves straight to the right.
     var acrossTilt = 0.0
 
-    /// Reach: the typical result of four calibrations on 2026-09-24, in two poses: 64°
-    /// to 73° across and 27° to 32° up and down. Tilt: a little under the 13° measured,
-    /// since arms differ. A left arm stays at zero until it has been measured.
+    /// Reach: four calibrations on 2026-09-24 gave 64° to 73° across and 27° to 32° up
+    /// and down, and two later ones, with the arm used to the cursor, 77° and 84° across
+    /// and 29° and 37° up and down. In the practice lab the lower gain of 84° × 37°
+    /// overshot targets by 7 points against 26 and hit moving targets more often. The
+    /// default sits between. Tilt: the later calibrations measured 0.13 and 0.04. A left
+    /// arm stays at zero until it has been measured.
     static func standard(for hand: BandHand) -> PointerReach {
-        PointerReach(degreesAcrossWidth: 65, degreesAcrossHeight: 31, upTilt: hand == .right ? 0.18 : 0)
+        PointerReach(degreesAcrossWidth: 75, degreesAcrossHeight: 34, upTilt: hand == .right ? 0.1 : 0)
     }
     static let limits = 5.0...90.0
     static let tiltLimit = 0.6
