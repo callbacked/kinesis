@@ -344,6 +344,11 @@ import KinesisCore
         if !backlog { stamp += UInt64(seconds * 1e6) }
     }
 
+    /// A backlog clears: what arrives next is on time again.
+    func catchUp(_ seconds: Double) {
+        stamp += UInt64(seconds * 1e6)
+    }
+
     func gesture(_ finger: String, _ action: String, derived: String = "unknown", synthetic: Bool = false) {
         connection.send(.gesture(BandGesture(sequence: 1, timestampUs: 1, finger: finger, action: action,
                                              derivedAction: derived, synthetic: synthetic, receivedAt: clock.now)),
@@ -548,6 +553,29 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     try await rig.aim(0, for: 0.2)
     rig.gesture("index", "release")
     #expect(rig.controls.buttonEvents.map(\.down) == [true, false])
+    // Once data is on time again, the next pinch clicks: the dropped release left nothing behind.
+    rig.catchUp(2)
+    try await rig.aim(0, for: 0.3)
+    rig.gesture("index", "press")
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false, true])
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func optionDuringADragLetsGoOfTheButton() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    rig.gesture("index", "press")
+    try await rig.sweep(to: 4, from: (0, 0))
+    // Pinches are ignored while Option is down, so the drag ends as Option goes down.
+    rig.model.setCursorRepositioning(true)
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false])
+    rig.gesture("index", "release")
+    rig.model.setCursorRepositioning(false)
+    try await rig.aim(4, for: 0.3)
+    rig.gesture("index", "press")
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false, true])
     await rig.model.shutdown()
 }
 

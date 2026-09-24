@@ -63,10 +63,7 @@ struct CursorPage: View {
                         ? String(format: "lab · %.0f pt/°, tilt %.2f", model.cursorSpeed, model.pointerReach.upTilt) : "lab") {
                 HStack(spacing: 14) {
                     if model.pointerCalibrated {
-                        Button("reset") {
-                            model.resetPointerReach()
-                            model.cursorSpeed = PointerReach.standardSpeed
-                        }
+                        Button("reset") { model.resetPointerReach() }
                         .buttonStyle(.plain).font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
                     }
                     Button(model.pointerCalibrated ? "redo" : "start") { model.beginPointerCalibration() }

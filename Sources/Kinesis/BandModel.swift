@@ -110,7 +110,7 @@ final class BandModel: ObservableObject {
     private var calmArmSpeed = 0.0
     /// While the cursor page is open, 20 times a second: where the forearm points.
     @Published private(set) var cursorAim: ForearmAim?
-    private var cursorLiveAt = (wobble: -Double.infinity, aim: -Double.infinity)
+    private var cursorLiveAt = (armSpeed: -Double.infinity, aim: -Double.infinity)
     /// Pointer actions tried since the cursor page opened, so it can show them done.
     @Published private(set) var cursorSkills: Set<CursorSkill> = []
     enum CursorSkill: CaseIterable { case click, rightClick, doubleClick, drag }
@@ -714,6 +714,8 @@ final class BandModel: ObservableObject {
         cursorRepositioning = active
         // The arm was set down somewhere new, like a lifted mouse: that is home now.
         if !active { pointerHome.reset() }
+        // Pinches are ignored while Option is down, so a drag could never be let go. End it now.
+        if active { releaseHeldButton() }
         cursorPressedFingers.removeAll()
         pinchedFinger = nil
         // Like lifting a mouse: movement while Option is down is dropped.
@@ -774,9 +776,9 @@ final class BandModel: ObservableObject {
             let posted = try controls.moveCursor(to: target, dragging: heldButton?.button)
             cursorLastPosted = posted
             if let arm {
-                let now = SIMD2(Double(posted.x), Double(posted.y)) / scale
-                if abs(posted.x - target.x) > 0.5 { pointerHome.rehome(axis: 0, pointer: now, arm: arm) }
-                if abs(posted.y - target.y) > 0.5 { pointerHome.rehome(axis: 1, pointer: now, arm: arm) }
+                let postedDegrees = SIMD2(Double(posted.x), Double(posted.y)) / scale
+                if abs(posted.x - target.x) > 0.5 { pointerHome.rehome(axis: 0, pointer: postedDegrees, arm: arm) }
+                if abs(posted.y - target.y) > 0.5 { pointerHome.rehome(axis: 1, pointer: postedDegrees, arm: arm) }
             }
         } catch {
             self.error = error.localizedDescription
@@ -1159,6 +1161,9 @@ final class BandModel: ObservableObject {
             // motion around them. A pinch from seconds ago must not click now.
             if linkIsLate(at: now) {
                 if heldButton?.finger == message.finger { releaseHeldButton() }
+                // Forget this finger's pinch too: a dropped release would otherwise swallow the next press.
+                cursorPressedFingers.remove(message.finger)
+                if pinchedFinger == message.finger { pinchedFinger = nil }
                 connectionLog.notice("Dropped a \(message.finger, privacy: .public) \(message.action, privacy: .public) that arrived \(self.linkDelay, privacy: .public)s late")
                 return
             }
@@ -1257,9 +1262,9 @@ final class BandModel: ObservableObject {
             if delay <= Self.lateInput { airPointer.receiveGyro(values, at: event.receivedAt - delay) }
             if cursorPageVisible {
                 calmArmSpeed += (airPointer.speed - calmArmSpeed) * (1 - exp(-(1.0 / 128) / 0.25))
-                if event.receivedAt - cursorLiveAt.wobble >= 0.05 {
+                if event.receivedAt - cursorLiveAt.armSpeed >= 0.05 {
                     cursorArmSpeed = calmArmSpeed
-                    cursorLiveAt.wobble = event.receivedAt
+                    cursorLiveAt.armSpeed = event.receivedAt
                 }
             }
             if developerMode { motion.receiveGyro(values, at: event.receivedAt) }
@@ -1456,10 +1461,11 @@ final class BandModel: ObservableObject {
         lastAction = "Calibration cancelled"
     }
 
-    /// Forgets this band's calibration and goes back to the standard reach.
+    /// Forgets this band's calibration: the standard slant, and the standard speed it set.
     func resetPointerReach() {
         defaults.removeObject(forKey: pointerReachKey)
         loadPointerReach()
+        cursorSpeed = PointerReach.standardSpeed
     }
 
     private func receiveCalibrationGesture(_ message: BandGesture, now: Double) {
