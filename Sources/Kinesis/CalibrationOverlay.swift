@@ -1,3 +1,4 @@
+#if KINESIS_DEV
 import AppKit
 import Combine
 import KinesisCore
@@ -103,3 +104,4 @@ private struct Target: View {
         .accessibilityHidden(true)
     }
 }
+#endif

@@ -55,8 +55,20 @@ def speed_of(summary):
 
 
 def load(folder):
-    lines = lambda name: [json.loads(line) for line in open(folder / name) if line.strip()]
-    summary = json.load(open(folder / "summary.json")) if (folder / "summary.json").exists() else {}
+    def lines(name):
+        # A run cut short can end on a partial line: skip what doesn't parse.
+        rows = []
+        for line in open(folder / name):
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        return rows
+
+    try:
+        summary = json.load(open(folder / "summary.json"))
+    except (OSError, json.JSONDecodeError):
+        summary = {}
     trials = lines("trials.jsonl") if (folder / "trials.jsonl").exists() else []
     pointer = lines("pointer.jsonl") if (folder / "pointer.jsonl").exists() else []
     aims = []
@@ -146,9 +158,14 @@ def main():
     arguments = sys.argv[1:]
     runs = sorted((p for p in LAB.iterdir() if p.is_dir()), key=lambda p: p.name) if LAB.exists() else []
     if arguments[:1] == ["--last"]:
+        if len(arguments) < 2 or not arguments[1].isdigit():
+            sys.exit(__doc__)
         folders = runs[-int(arguments[1]):]
     elif arguments:
         folders = [Path(a).expanduser() for a in arguments]
+        missing = [str(f) for f in folders if not f.is_dir()]
+        if missing:
+            sys.exit("no such run: " + ", ".join(missing))
     else:
         newest = {}
         for run in runs:

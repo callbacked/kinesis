@@ -115,7 +115,8 @@ struct LabEvent {
         let text = try String(contentsOfFile: path, encoding: .utf8)
         var events: [LabEvent] = []
         for line in text.split(separator: "\n") {
-            guard let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+            // A log cut short can end on a partial line: skip what doesn't parse.
+            guard let row = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
                   let at = row["at"] as? Double, let stamp = (row["t"] as? NSNumber)?.uint64Value,
                   let event = row["event"] as? String else { continue }
             let values = (row["v"] as? [Double]) ?? []

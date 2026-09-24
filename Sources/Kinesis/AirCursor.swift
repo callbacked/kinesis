@@ -404,7 +404,7 @@ enum PointerAcceleration {
 /// How late the band's data reaches the Mac, measured with the band's own clock.
 ///
 /// Measured on 2026-09-24: on a congested link the band's samples arrived up to
-/// 12 seconds late, in bursts, while the link itself stayed up. Host arrival time
+/// 22 seconds late, in bursts, while the link itself stayed up. Host arrival time
 /// cannot see that, because a late sample is still new to the Mac. The smallest
 /// gap between host time and band time is the transit time of an on-time sample;
 /// anything above it is delay. The baseline creeps up by at most 0.5 ms a second,

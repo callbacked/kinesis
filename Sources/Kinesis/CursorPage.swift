@@ -202,7 +202,7 @@ private struct TryItRow: View {
                 ForEach(skills, id: \.1) { skill, word in
                     let isDone = done.contains(skill)
                     HStack(spacing: 5) {
-                        if isDone { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)) }
+                        if isDone { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).accessibilityHidden(true) }
                         Text(word)
                     }
                     .font(KinesisType.caption)

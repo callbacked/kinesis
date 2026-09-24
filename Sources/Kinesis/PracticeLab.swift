@@ -28,6 +28,7 @@ import SwiftUI
         let pointer = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(pointer, $0.frame, false) }) ?? NSScreen.main else { return }
         let session = PracticeSession(model: model) { [weak self] in self?.close() }
+        session.refreshRate = screen.maximumFramesPerSecond
         let window = PracticeNSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.level = .floating
         window.isReleasedWhenClosed = false
@@ -52,6 +53,11 @@ import SwiftUI
         }
         self.window = window
         self.session = session
+    }
+
+    /// True for a key press in the lab, which handles Escape itself.
+    func owns(_ event: NSEvent) -> Bool {
+        window != nil && event.window === window
     }
 
     func close() {
@@ -206,6 +212,9 @@ struct PracticeRandom {
     private var grabError: Double?
     private var attempts = 0
     private var events: FileHandle?
+    private var trialFile: FileHandle?
+    /// The lab display's refresh rate, for the summary.
+    var refreshRate = 0
     private var started = Date()
     private var timeout: Task<Void, Never>?
     private var countdown: Task<Void, Never>?
@@ -233,7 +242,9 @@ struct PracticeRandom {
             let events = folder.appendingPathComponent("pointer.jsonl")
             FileManager.default.createFile(atPath: events.path, contents: nil)
             self.events = try FileHandle(forWritingTo: events)
-            FileManager.default.createFile(atPath: folder.appendingPathComponent("trials.jsonl").path, contents: nil)
+            let trials = folder.appendingPathComponent("trials.jsonl")
+            FileManager.default.createFile(atPath: trials.path, contents: nil)
+            trialFile = try FileHandle(forWritingTo: trials)
         } catch {
             problem = "couldn’t save the run: \(error.localizedDescription)"
             return
@@ -253,7 +264,24 @@ struct PracticeRandom {
     }
 
     func escape() {
-        if phase == .idle || phase == .done { onClose() } else { finish() }
+        switch phase {
+        case .idle, .done: onClose()
+        // Nothing happened yet: leave no empty run behind.
+        case .countdown: discard()
+        case .running: finish()
+        }
+    }
+
+    private func discard() {
+        countdown?.cancel()
+        model.setMotionLog(path: nil)
+        try? events?.close()
+        try? trialFile?.close()
+        events = nil
+        trialFile = nil
+        if let folder { try? FileManager.default.removeItem(at: folder) }
+        folder = nil
+        phase = .idle
     }
 
     /// Ends a run early or on close, and saves what it has.
@@ -352,26 +380,27 @@ struct PracticeRandom {
         timeout?.cancel()
         let center = target.center(at: time)
         let path = zip(trialPath, trialPath.dropFirst()).map { hypot($1.x - $0.x, $1.y - $0.y) }.reduce(0, +)
-        let startCenter = mode == .drag ? (dot ?? center) : target.center(at: target.spawnedAt)
+        // Straightness compares the path with the line to where the target was reached:
+        // the dot for a drag, the spot it was hit for a moving target.
+        let startCenter = switch mode {
+        case .targets: target.center(at: target.spawnedAt)
+        case .moving: center
+        case .drag: dot ?? center
+        }
         let trial = Trial(mode: mode, index: trials.count, spawnedAt: target.spawnedAt, endedAt: time, seconds: time - target.spawnedAt,
                           from: trialFrom, target: center, radius: target.radius, hit: hit, timedOut: timedOut, point: point,
                           error: point.map { hypot($0.x - center.x, $0.y - center.y) }, button: button, pathLength: path,
                           distance: hypot(startCenter.x - trialFrom.x, startCenter.y - trialFrom.y),
                           grabError: mode == .drag ? grabError : nil, attempts: mode == .drag ? attempts : nil)
         trials.append(trial)
-        if let folder, let line = try? JSONEncoder().encode(trial),
-           let handle = try? FileHandle(forWritingTo: folder.appendingPathComponent("trials.jsonl")) {
-            handle.seekToEndOfFile()
-            handle.write(line + Data([0x0a]))
-            try? handle.close()
-        }
+        if let line = try? JSONEncoder().encode(trial) { append(line + Data([0x0a]), to: \.trialFile) }
         self.target = nil
         dot = nil
         nextTrial()
     }
 
     private func write(_ event: NSEvent, at point: CGPoint) {
-        guard let events, phase != .idle else { return }
+        guard events != nil, phase != .idle else { return }
         let kind = switch event.type {
         case .mouseMoved: "move"
         case .leftMouseDown, .rightMouseDown: "down"
@@ -381,7 +410,17 @@ struct PracticeRandom {
         let button = [.rightMouseDown, .rightMouseUp, .rightMouseDragged].contains(event.type) ? "right" : "left"
         let line = String(format: "{\"t\":%.5f,\"x\":%.2f,\"y\":%.2f,\"type\":\"%@\",\"button\":\"%@\"}\n",
                           event.timestamp, point.x, point.y, kind, button)
-        events.write(Data(line.utf8))
+        append(Data(line.utf8), to: \.events)
+    }
+
+    /// Writes to a run file. A full disk or a removed volume ends that file, never the app.
+    private func append(_ data: Data, to file: ReferenceWritableKeyPath<PracticeSession, FileHandle?>) {
+        guard let handle = self[keyPath: file] else { return }
+        do { try handle.write(contentsOf: data) } catch {
+            try? handle.close()
+            self[keyPath: file] = nil
+            problem = "couldn’t save the run: \(error.localizedDescription)"
+        }
     }
 
     private func finish() {
@@ -391,7 +430,9 @@ struct PracticeRandom {
         dot = nil
         model.setMotionLog(path: nil)
         try? events?.close()
+        try? trialFile?.close()
         events = nil
+        trialFile = nil
         phase = .done
         func median(_ values: [Double]) -> Double? {
             guard !values.isEmpty else { return nil }
@@ -404,12 +445,12 @@ struct PracticeRandom {
             medianStraightness: median(trials.filter { $0.hit && $0.pathLength > 0 }.map { min(1, $0.distance / $0.pathLength) }),
             speed: model.cursorSpeed, flickBoost: model.cursorFlickBoost, steadiness: model.cursorSteadiness, hand: "\(model.bandHand)",
             reach: model.pointerReach, calibrated: model.pointerCalibrated, display: bounds,
-            refreshRate: NSScreen.main?.maximumFramesPerSecond ?? 0)
+            refreshRate: refreshRate)
         self.summary = summary
         if let folder {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try? encoder.encode(summary).write(to: folder.appendingPathComponent("summary.json"))
+            try? encoder.encode(summary).write(to: folder.appendingPathComponent("summary.json"), options: .atomic)
         }
     }
 }

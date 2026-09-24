@@ -31,3 +31,5 @@ while [ $# -gt 0 ]; do
     esac
 done
 swift test --filter pointerLab 2>&1 | grep -vE '^(\[|Building|Build complete|Compiling|Write|Planning|Test Suite|Test Case|Executed|◇|↳)' | grep -vE '^􀟈|^✔ Test run|^􁁛' || true
+# The filters above may match nothing. The test's own result is what counts.
+exit "${PIPESTATUS[0]}"

@@ -9,9 +9,13 @@ extension Bundle {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = BandModel()
     private var cursorKeyMonitors: [Any] = []
+    #if KINESIS_DEV
     private var calibrationOverlay: CalibrationOverlay?
+    #endif
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if KINESIS_DEV
         calibrationOverlay = CalibrationOverlay(model: model)
+        #endif
         // Local monitors cover Kinesis; global monitors cover whichever app the
         // user is pointing at. Both use the app's existing Accessibility access.
         if let monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged], handler: { [weak self] event in
@@ -26,11 +30,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleCursorKey(_ event: NSEvent) {
         // A mapped thumb swipe can send Escape without disabling the cursor.
         guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != MacShortcuts.shortcutEventTag else { return }
+        #if KINESIS_DEV
+        // Escape in the practice lab ends a run. It must not turn the cursor off too.
+        if event.type == .keyDown, PracticeWindow.shared.owns(event) { return }
+        #endif
         if event.type == .keyDown, event.keyCode == 53 { model.setAirCursorEnabled(false) }
         model.setCursorRepositioning(event.modifierFlags.contains(.option))
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        #if KINESIS_DEV
+        // A run in progress saves what it has.
+        PracticeWindow.shared.close()
+        #endif
         Task {
             await model.shutdown()
             sender.reply(toApplicationShouldTerminate: true)

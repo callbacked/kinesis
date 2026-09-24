@@ -76,7 +76,7 @@ struct HandSceneView: NSViewRepresentable {
     func updateNSView(_ view: SCNView, context: Context) {
         context.coordinator.setBackground(dark: colorScheme == .dark)
         context.coordinator.setHand(hand)
-        context.coordinator.setAim(aim, hand: hand)
+        context.coordinator.setAim(aim, hand: hand, animated: !reduceMotion)
         context.coordinator.show(highlight, gesture: gesture, revision: revision, sustained: sustained,
                                  roll: Float(roll), animated: !reduceMotion)
     }
