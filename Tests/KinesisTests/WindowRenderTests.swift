@@ -34,7 +34,7 @@ private struct AllowedControls: MacControls {
     var cursorLocation: CGPoint? { .zero }
     var displaySize: CGSize { CGSize(width: 1600, height: 1000) }
     func moveCursor(to point: CGPoint) throws -> CGPoint { point }
-    func click(_ button: CGMouseButton, count: Int) throws {}
+    func click(_ button: CGMouseButton, count: Int, at point: CGPoint?) throws {}
 }
 
 @MainActor private final class NoSession: MetaSessionStoring {

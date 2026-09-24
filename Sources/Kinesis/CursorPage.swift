@@ -54,7 +54,7 @@ struct CursorPage: View {
                     Text("more steady")
                 }.font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
             }
-            Text("the pointer holds still while you pinch, so clicks land where you aimed. hold Option to move your arm without moving the pointer.")
+            Text("a click lands where you aimed just before the pinch, so the pinch’s nudge doesn’t miss. hold Option to move your arm without moving the pointer.")
                 .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Text("thumb swipes keep your gesture shortcuts. cursor mode turns off when you pause or disconnect.")

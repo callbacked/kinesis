@@ -127,6 +127,12 @@ final class BandModel: ObservableObject {
     private var cursorNeedsAnchor = true
     private var cursorMotionResumesAt = -Double.infinity
     private var cursorLastOrientation = -Double.infinity
+    /// Where this app put the pointer over the last half second, so a click can land
+    /// where the arm aimed just before the pinch nudged it.
+    private var cursorTrail: [(time: Double, point: CGPoint)] = []
+    /// How far back a click looks: the forearm starts to move as the pinch closes,
+    /// before the band reports it.
+    static let clickLookback = 0.15
     private var cursorTicker: AnyCancellable?
     /// True while the band's data reaches the Mac late: a congested or blocked radio link.
     @Published private(set) var linkCongested = false
@@ -627,6 +633,7 @@ final class BandModel: ObservableObject {
         cursorRepositioning = false
         // Start from wherever the pointer is.
         cursorNeedsAnchor = true
+        cursorTrail = []
         cursorMotionResumesAt = -.infinity
         cursorTicker?.cancel()
         cursorTicker = nil
@@ -675,8 +682,12 @@ final class BandModel: ObservableObject {
         let scale = pointerReach.pointsPerDegree(display: controls.displaySize, sensitivity: cursorSensitivity)
         let delta = SIMD2(-movement.x, -movement.y) * scale
         guard abs(delta.x) + abs(delta.y) >= 0.05 else { return }
-        do { _ = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y)) }
-        catch {
+        do {
+            if cursorTrail.isEmpty { cursorTrail.append((now, location)) }
+            let posted = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y))
+            cursorTrail.append((now, posted))
+            cursorTrail.removeAll { now - $0.time > 0.5 }
+        } catch {
             self.error = error.localizedDescription
             pause()
         }
@@ -1180,9 +1191,7 @@ final class BandModel: ObservableObject {
               message.receivedAt >= cursorArmedAt, now - message.receivedAt <= 0.1 else { return }
         let actions = [message.action, message.derivedAction]
         if actions.contains(where: { ["release", "buttonRelease", "buttonHoldRelease"].contains($0) }) {
-            if cursorPressedFingers.remove(message.finger) != nil {
-                steadyCursor(until: now + 0.12)
-            }
+            cursorPressedFingers.remove(message.finger)
             if pinchedFinger == message.finger { pinchedFinger = nil }
             return
         }
@@ -1191,11 +1200,13 @@ final class BandModel: ObservableObject {
         guard actions.contains(where: { ["press", "buttonPress"].contains($0) }),
               !actions.contains("buttonHold"), cursorPressedFingers.insert(message.finger).inserted else { return }
         guard controls.trusted else { pause(); return }
-        steadyCursor(until: now + 0.2)
         pinchedFinger = message.finger
         let button: CGMouseButton = message.finger == "index" ? .left : .right
+        // The pointer never stops for a pinch, so aiming at something that moves keeps
+        // working. The click lands where the pointer was just before the pinch began.
+        let aimedAt = cursorTrail.last { $0.time <= message.receivedAt - Self.clickLookback }?.point ?? cursorTrail.first?.point
         do {
-            try controls.click(button, count: 1)
+            try controls.click(button, count: 1, at: aimedAt)
             lastAction = button == .left ? "Left click" : "Right click"
             recognizedGesture = .tap(message.finger == "index" ? .indexTap : .middleTap)
             gestureCount += 1

@@ -13,7 +13,8 @@ protocol MacControls {
     var displaySize: CGSize { get }
     /// Moves the pointer as close to this point as a real display allows, and returns where it went.
     func moveCursor(to point: CGPoint) throws -> CGPoint
-    func click(_ button: CGMouseButton, count: Int) throws
+    /// Clicks at a point, or where the pointer is when the point is nil.
+    func click(_ button: CGMouseButton, count: Int, at point: CGPoint?) throws
 }
 
 @MainActor
@@ -58,9 +59,9 @@ struct MacShortcuts: MacControls {
         } ?? origin
     }
 
-    func click(_ button: CGMouseButton, count: Int) throws {
+    func click(_ button: CGMouseButton, count: Int, at point: CGPoint?) throws {
         guard trusted else { throw KinesisError(message: "Allow Kinesis in Accessibility to click.") }
-        guard let location = CGEvent(source: nil)?.location else { return }
+        guard let location = point ?? CGEvent(source: nil)?.location else { return }
         let events = try Self.clickEvents(button, count: count, at: location)
         for event in events { event.post(tap: .cghidEventTap) }
     }

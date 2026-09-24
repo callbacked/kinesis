@@ -250,9 +250,12 @@ import KinesisCore
         location = point
         return point
     }
-    func click(_ button: CGMouseButton, count: Int) throws {
+    private(set) var clickPoints: [CGPoint?] = []
+    func click(_ button: CGMouseButton, count: Int, at point: CGPoint?) throws {
         if let failure { throw failure }
         clicks.append((button, count))
+        clickPoints.append(point)
+        if let point { location = point }
     }
     private(set) var accessRequests = 0
     func requestAccess() { accessRequests += 1 }
@@ -294,7 +297,8 @@ import KinesisCore
     }
 
     /// Turns the arm steadily to an aim over `seconds`, then holds it briefly.
-    func sweep(to azimuth: Double, _ elevation: Double = 0, from start: (Double, Double), seconds: Double = 0.4) async throws {
+    func sweep(to azimuth: Double, _ elevation: Double = 0, from start: (Double, Double), seconds: Double = 0.4,
+               settle: Double = 0.2) async throws {
         let steps = Int(seconds * 128)
         for step in 1...steps {
             let t = Double(step) / Double(steps)
@@ -309,7 +313,7 @@ import KinesisCore
             // Let display frames pass as the arm moves, so the pointer follows along.
             if step % 8 == 0 { try await Task.sleep(for: .milliseconds(17)) }
         }
-        try await aim(azimuth, elevation, for: 0.2)
+        if settle > 0 { try await aim(azimuth, elevation, for: settle) }
     }
 
     /// Holds an aim at 128 Hz, then lets a few display frames pass.
@@ -431,22 +435,30 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
 }
 
 @Test(arguments: ["index", "middle"])
-@MainActor func aPinchHoldsThePointerSoItsTwitchNeverMovesIt(finger: String) async throws {
+@MainActor func aPinchNeverStopsThePointerAndClicksWhereItAimedBeforeTheTwitch(finger: String) async throws {
     let rig = CursorRig()
     try await rig.aim(0)
     rig.model.setAirCursorEnabled(true)
     try await rig.aim(0)
+    try await rig.sweep(to: 5, from: (0, 0))
+    // On target, and still a moment, as before a shot.
+    try await rig.aim(5, for: 0.3)
+    let aimed = rig.pointer
+    // The pinch jerks the arm two degrees, and the band reports the pinch a moment later.
+    try await rig.sweep(to: 7, from: (5, 0), seconds: 0.08, settle: 0)
+    try await Task.sleep(for: .milliseconds(40))
+    let twitched = rig.pointer
+    #expect(twitched.x < aimed.x - 5)
     rig.gesture(finger, "press")
     #expect(rig.controls.clicks.map { $0.0 } == [finger == "index" ? .left : .right])
-    // The arm twitches by two degrees with the pinch, and stays there.
-    try await rig.aim(2, 1, for: 0.1)
-    try await rig.aim(2, 1, for: 0.3)
+    let click = try #require(rig.controls.clickPoints.last ?? nil)
+    #expect(abs(click.x - aimed.x) < 3 && abs(click.y - aimed.y) < 3)
+    // The pointer keeps following the arm through the pinch and its release.
+    let moves = rig.controls.cursorMoves.count
+    try await rig.sweep(to: 10, from: (7, 0))
     rig.gesture(finger, "release")
-    try await rig.aim(2, 1, for: 0.3)
-    #expect(rig.controls.cursorMoves.isEmpty)
-    // Afterwards the arm moves the pointer from where the click landed.
-    try await rig.sweep(to: 6, 1, from: (2, 1))
-    #expect(rig.pointer.x < 790)
+    try await rig.sweep(to: 12, from: (10, 0))
+    #expect(rig.controls.cursorMoves.count > moves + 2 && rig.pointer.x < click.x - 50)
     await rig.model.shutdown()
 }
 
