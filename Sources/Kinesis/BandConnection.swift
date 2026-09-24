@@ -18,7 +18,8 @@ enum BandOperation {
 }
 
 @MainActor
-protocol BandConnection {
+protocol BandConnection: AnyObject {
+    func setRawEMGEnabled(_ enabled: Bool) throws
     func start(_ operation: BandOperation, onEvent: @escaping (BandEvent) -> Void,
                onEnd: @escaping (Error?) -> Void) throws
     func stop()
@@ -43,6 +44,8 @@ final class NativeBandConnection: NSObject, BandConnection,
     private var channel: CBL2CAPChannel?
     private var batteryCharacteristic: CBCharacteristic?
     private var nextBatteryRead = 0.0
+    private var nextBatteryStatusRead = 0.0
+    private var rawEMGMode = false
     private var session: BandSession?
     private var onEvent: ((BandEvent) -> Void)?
     private var onEnd: ((Error?) -> Void)?
@@ -132,6 +135,14 @@ final class NativeBandConnection: NSObject, BandConnection,
         } catch { fail(error) }
     }
 
+    func setRawEMGEnabled(_ enabled: Bool) throws {
+        rawEMGMode = enabled
+        if let session, !stopping, !disconnecting {
+            outgoing.append(try session.setRawEMGEnabled(enabled, at: now))
+            try flushOutput()
+        }
+    }
+
     func setHandedness(_ hand: BandHand) throws {
         guard let session, !stopping, !disconnecting else {
             throw KinesisError(message: "Connect the band before choosing a hand.")
@@ -159,6 +170,21 @@ final class NativeBandConnection: NSObject, BandConnection,
         guard !disconnecting, !stopping else { return }
         if case .handedness(let hand) = event.payload {
             log.notice("Band hand confirmed: \(hand.rawValue, privacy: .public)")
+        }
+        switch event.payload {
+        case .batteryStatus(let status):
+            if let status {
+                log.info("Battery status: \(status.level, privacy: .public)%, charging \(String(describing: status.charging), privacy: .public)")
+            } else { log.info("Battery charging status unavailable") }
+        case .rawEMGConfiguration(let config):
+            log.notice("EMG configuration: \(config.channels, privacy: .public) channels at \(config.sampleRate, privacy: .public) Hz, encoding \(config.encoding, privacy: .public)")
+        case .rawEMGState(let enabled):
+            log.notice("EMG subscription confirmed: \(enabled, privacy: .public)")
+        case .rawEMGFailure(let message):
+            log.error("EMG subscription: \(message, privacy: .public)")
+        case .rawEMGFrame:
+            if session?.rawEMGFrames == 1 { log.notice("First EMG sensor payload received") }
+        default: break
         }
         onEvent?(event)
     }
@@ -193,6 +219,13 @@ final class NativeBandConnection: NSObject, BandConnection,
         }
         if !stopping, let session {
             for event in session.tick(at: now) { emit(event) }
+            if session.streamsEnabled, now >= nextBatteryStatusRead {
+                nextBatteryStatusRead = now + 5
+                do {
+                    outgoing.append(try session.queryBatteryStatus(at: now))
+                    try flushOutput()
+                } catch { fail(error) }
+            }
             if session.streamsEnabled, now - lastReadAt >= 2, now - lastStatusQuery >= 2 {
                 do {
                     outgoing.append(try session.queryStreamState())
@@ -308,6 +341,7 @@ final class NativeBandConnection: NSObject, BandConnection,
             if characteristic.uuid == batteryID {
                 batteryCharacteristic = characteristic
                 nextBatteryRead = now + 60
+                if characteristic.properties.contains(.notify) { peripheral.setNotifyValue(true, for: characteristic) }
             }
             peripheral.readValue(for: characteristic)
         }
@@ -351,13 +385,13 @@ final class NativeBandConnection: NSObject, BandConnection,
                 // A pairing-mode band runs the ownership ceremony with a fresh
                 // app identity; the enrolled startup takes over after it.
                 log.notice("Starting band ownership ceremony")
-                session = try BandSession(ceremony: OwnershipCeremony(bandID: identifier))
+                session = try BandSession(ceremony: OwnershipCeremony(bandID: identifier), rawEMG: rawEMGMode)
             } else {
                 // A stored identity authenticates enrolled bands; a band that
                 // rejected the identity falls back to the legacy startup.
                 let enrollment = identityRejected.contains(identifier) ? nil : BandIdentity.enrollment(for: identifier)
                 if enrollment != nil { log.notice("Authenticating with the stored band identity") }
-                session = try BandSession(enrollment: enrollment)
+                session = try BandSession(enrollment: enrollment, rawEMG: rawEMGMode)
             }
             self.session = session
             self.channel = channel

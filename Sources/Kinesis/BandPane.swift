@@ -73,7 +73,7 @@ struct BandPane: View {
             actions
             Rectangle().fill(KinesisStyle.line).frame(height: 1).padding(.top, 24)
             HStack(alignment: .top) {
-                Readout(symbol: batterySymbol, value: model.battery.map { "\($0) %" } ?? "–", label: "battery")
+                batteryReadout
                 Spacer()
                 Readout(symbol: "hand.draw", value: model.totalGestureCount.formatted(), label: "gestures",
                         alignment: .trailing)
@@ -132,6 +132,8 @@ struct BandPane: View {
     @ViewBuilder private var noticeContent: some View {
         if model.awaitingSystemPairing {
             PaneNotice(symbol: "hand.tap", text: "accept the bluetooth request", tint: KinesisStyle.accent)
+        } else if let hint = model.streamHint {
+            PaneNotice(symbol: "questionmark.circle", text: hint, tint: KinesisStyle.warning)
         } else if model.live, let battery = model.battery, battery <= 15 {
             PaneNotice(symbol: "bolt.fill", text: "low battery", tint: KinesisStyle.warning)
         } else {
@@ -178,6 +180,24 @@ struct BandPane: View {
         }
     }
 
+    /// Charger state comes from the band, independently of percentage changes.
+    @ViewBuilder private var batteryReadout: some View {
+        let readout = Readout(symbol: batterySymbol,
+                              statusSymbol: model.chargeState.isCharging ? "bolt.fill" : nil,
+                              value: model.battery.map { "\($0) %" } ?? "–",
+                              label: model.chargeState.isCharging ? "charging" : "battery")
+        if model.battery != nil { readout.help(batteryHelp) } else { readout }
+    }
+
+    private var batteryHelp: String {
+        switch model.chargeState {
+        case .unknown: "charger status unavailable"
+        case .charging: "charging"
+        case .full: "charged"
+        case .onBattery: "on battery"
+        }
+    }
+
     private var batterySymbol: String {
         switch model.battery ?? -1 {
         case 88...: "battery.100percent"
@@ -198,8 +218,9 @@ private struct PaneNotice: View {
         HStack(spacing: 8) {
             Image(systemName: symbol).font(.system(size: 11, weight: .medium)).foregroundStyle(tint)
             Text(text).font(KinesisType.micro).foregroundStyle(KinesisStyle.ink.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 13).frame(height: 30)
+        .padding(.horizontal, 13).padding(.vertical, 6).frame(minHeight: 30, alignment: .center)
         .background(tint.opacity(0.1), in: Capsule())
         .overlay(Capsule().strokeBorder(tint.opacity(0.35)))
         .transition(.opacity.combined(with: .offset(y: -4)))

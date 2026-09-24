@@ -66,7 +66,9 @@ private struct BandMenu: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         Text("\(model.bandName.lowercased()) · \(model.phase.lowercased())")
-        if let battery = model.battery { Text("battery \(battery)%") }
+        if let battery = model.battery {
+            Text(model.chargeState.isCharging ? "battery \(battery)% · charging" : "battery \(battery)%")
+        }
         Divider()
         // The same next step the band's column offers, so the menu never disagrees with the window.
         switch model.nextAction {

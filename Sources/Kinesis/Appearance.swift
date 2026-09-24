@@ -93,6 +93,24 @@ struct Field: View {
     }
 }
 
+/// A fine lit edge gives controls depth without changing their fill colour.
+struct PillSurface: View {
+    let fill: Color
+    var raised = false
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Capsule().fill(fill)
+            .overlay {
+                Capsule().strokeBorder(
+                    LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.15 : 0.7),
+                                            KinesisStyle.line.opacity(0.25), KinesisStyle.line.opacity(0.7)],
+                                   startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
+            }
+            .shadow(color: .black.opacity(raised ? (scheme == .dark ? 0.18 : 0.07) : 0), radius: 3, y: 1.5)
+    }
+}
+
 /// A pill. The key action is tinted with the accent. Everything else is a quiet tray.
 struct KinesisButtonStyle: ButtonStyle {
     var prominent = false
@@ -108,10 +126,13 @@ struct KinesisButtonStyle: ButtonStyle {
             .frame(maxWidth: wide ? .infinity : nil)
             .padding(.horizontal, 18).padding(.vertical, 12)
             .foregroundStyle(prominent ? KinesisStyle.accent : KinesisStyle.ink)
-            .background(prominent ? KinesisStyle.accent.opacity(lifted ? 0.2 : 0.13) : (lifted ? KinesisStyle.trayHover : KinesisStyle.tray),
-                        in: Capsule())
-            .overlay(Capsule().strokeBorder(prominent ? KinesisStyle.accent.opacity(0.24) : .clear))
-            .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
+            .background {
+                PillSurface(fill: prominent ? KinesisStyle.accent.opacity(lifted ? 0.2 : 0.13)
+                            : (lifted ? KinesisStyle.trayHover : KinesisStyle.tray),
+                            raised: enabled && !configuration.isPressed)
+            }
+            .overlay(Capsule().strokeBorder(prominent ? KinesisStyle.accent.opacity(0.2) : .clear, lineWidth: 0.75))
+            .opacity(enabled ? (configuration.isPressed ? 0.82 : 1) : 0.45)
             .contentShape(Capsule())
             .scaleEffect(reduceMotion || !enabled ? 1 : configuration.isPressed ? 0.975 : 1)
             .animation(reduceMotion ? nil : KinesisMotion.press, value: configuration.isPressed)

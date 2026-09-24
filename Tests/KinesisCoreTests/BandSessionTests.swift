@@ -48,8 +48,8 @@ private struct Peer {
     var datax = DataXReceiver()
     var startup: [DataXFrame] = []
 
-    init(completeSetup: Bool = true) throws {
-        session = try BandSession()
+    init(completeSetup: Bool = true, rawEMG: Bool = false) throws {
+        session = try BandSession(rawEMG: rawEMG)
         let request = try session.request()
         #expect(request.prefix(12) == Data(hex: "806280018100000502000001"))
         let local = try ProtoFields(Data(request.dropFirst(12)))
@@ -95,6 +95,12 @@ private struct Peer {
 
     mutating func send(kind: UInt32, payload: Data, now: Double) throws -> [BandEvent] {
         let frame = try BandWire.frame(channel: kind == 0x02000315 ? 0x5 : 0x8010, words: [kind], payload: payload)
+        return try session.feed(sender.encrypt(frame), at: 100 + now).events
+    }
+
+    /// One raw emg sample frame, the captured shape: channel 0x5, kind 0x0200020a.
+    mutating func raw(_ payload: Data, now: Double) throws -> [BandEvent] {
+        let frame = try BandWire.frame(channel: 0x5, words: [0x0200020a], payload: payload)
         return try session.feed(sender.encrypt(frame), at: 100 + now).events
     }
 
@@ -589,4 +595,168 @@ func anotherRPCChannelCannotAcknowledgeTheInputSubscription(channel: UInt16) thr
     let accepted = try peer.exchange(channel: 5, kind: 0x02000315, payload: payload)
     #expect(accepted.events.contains { if case .connected = $0.payload { true } else { false } })
     #expect(peer.session.streamsEnabled)
+}
+
+private func emgConfigReply(id: UInt64 = 7, encoding: UInt64 = 0) -> Data {
+    let config = BandWire.field(1, 2048) + BandWire.field(2, 8) + BandWire.field(4, 16)
+        + BandWire.field(5, 16) + BandWire.field(10, encoding)
+    return BandWire.field(1, id) + BandWire.field(2, 1) + BandWire.field(6, BandWire.field(42, config))
+}
+
+private func streamReply(id: UInt64, raw: UInt64 = 0) -> Data {
+    BandWire.field(1, id) + BandWire.field(2, 1) + BandWire.field(5,
+        BandWire.field(2, raw) + BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1))
+}
+
+@Test func liveEMGCanBeEnabledAndDisabledWithoutReplacingGestureStreams() throws {
+    var peer = try Peer()
+    _ = try peer.exchange(channel: 5, kind: 0x02000315, payload: streamReply(id: 3))
+    let configRead = try #require(peer.requests(peer.session.setRawEMGEnabled(true, at: 100)).first)
+    #expect(configRead.channel == 0x8007)
+    #expect(configRead.words == [0x8100ce56, 0x02000314])
+    #expect(configRead.payload == BandWire.field(1, 7) + BandWire.field(5, Data()))
+    #expect(try peer.session.queryStreamState().isEmpty)
+    let queried = try peer.exchange(channel: 7, kind: 0x02000315, payload: emgConfigReply())
+    #expect(queried.events.contains { if case .rawEMGConfiguration(let config) = $0.payload { config.isSupported } else { false } })
+    let query = try #require(queried.requests.first)
+    #expect(query.channel == 0x8005 && query.words.isEmpty)
+    #expect(query.payload == BandWire.field(1, 8) + BandWire.field(4, Data()))
+    let enabled = try peer.exchange(channel: 5, kind: 0x02000315, payload: streamReply(id: 8))
+    let enable = try #require(enabled.requests.first)
+    #expect(enable.channel == 0x8005 && enable.words.isEmpty)
+    #expect(enable.payload == BandWire.field(1, 9) + BandWire.field(4,
+        BandWire.field(2, 1) + BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1)))
+    let ack = try peer.exchange(channel: 5, kind: 0x02000315, payload: streamReply(id: 9, raw: 1))
+    #expect(ack.events.contains { if case .rawEMGState(true) = $0.payload { true } else { false } })
+    #expect(!ack.events.contains { if case .connected = $0.payload { true } else { false } })
+    let sample = BandWire.field(1, 1) + BandWire.field(2, 1_000_000) + BandWire.field(3, Data(repeating: 128, count: 256))
+    #expect(try peer.raw(sample, now: 1).contains { if case .rawEMGFrame = $0.payload { true } else { false } })
+    let gesture = try peer.send(kind: 0x0200020d, payload: BandWire.field(1, 1) + BandWire.field(2, 1_000_000)
+        + BandWire.field(3, 2) + BandWire.field(4, 3), now: 1)
+    #expect(gesture.contains { if case .gesture = $0.payload { true } else { false } })
+    #expect(try peer.gyro(1_000_000, now: 1).contains { if case .dataSeen = $0.payload { true } else { false } })
+    let disable = try #require(peer.requests(peer.session.setRawEMGEnabled(false, at: 102)).first)
+    #expect(disable.payload == BandWire.field(1, 10) + BandWire.field(4,
+        BandWire.field(2, 0) + BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1)))
+    let off = try peer.exchange(channel: 5, kind: 0x02000315, payload: streamReply(id: 10), now: 2)
+    #expect(off.events.contains { if case .rawEMGState(false) = $0.payload { true } else { false } })
+    #expect(peer.session.streamsEnabled)
+    let stop = try #require(peer.requests(peer.session.stop()).first)
+    let allOff = [2, 3, 6, 8].reduce(into: Data()) { $0 += BandWire.field($1, 0) }
+    #expect(stop.payload == BandWire.field(1, 4) + BandWire.field(4, allOff))
+    _ = try peer.exchange(channel: 5, kind: 0x02000315,
+        payload: BandWire.field(1, 4) + BandWire.field(2, 1) + BandWire.field(5, allOff), now: 3)
+    #expect(peer.session.stopAcknowledged)
+    #expect(try peer.raw(sample, now: 4).isEmpty)
+}
+
+@Test func savedEMGPreferenceStartsGesturesBeforeAddingReadings() throws {
+    var peer = try Peer(rawEMG: true)
+    #expect(!peer.startup.contains { $0.channel == 0x8007 })
+    let ack = try peer.exchange(channel: 5, kind: 0x02000315, payload: streamReply(id: 3))
+    #expect(ack.events.contains { if case .connected = $0.payload { true } else { false } })
+    #expect(ack.requests.map(\.channel) == [0x8007])
+}
+
+@Test func EMGTimeoutAndRejectionDoNotDiscardTheGestureSubscription() throws {
+    var peer = try Peer()
+    _ = try peer.exchange(channel: 5, kind: 0x02000315, payload: streamReply(id: 3))
+    _ = try peer.requests(peer.session.setRawEMGEnabled(true, at: 100))
+    #expect(throws: BandProtocolError.self) { try peer.session.setRawEMGEnabled(false, at: 101) }
+    #expect(peer.session.tick(at: 109).contains { if case .rawEMGFailure = $0.payload { true } else { false } })
+    #expect(peer.session.streamsEnabled)
+    _ = try peer.requests(peer.session.setRawEMGEnabled(true, at: 110))
+    let rejected = try peer.exchange(channel: 7, kind: 0x02000315,
+        payload: BandWire.field(1, 8) + BandWire.field(2, 0), now: 10)
+    #expect(rejected.events.contains { if case .rawEMGFailure = $0.payload { true } else { false } })
+    #expect(peer.session.streamsEnabled)
+    _ = try peer.requests(peer.session.setRawEMGEnabled(true, at: 111))
+    let serviceRejected = try peer.exchange(channel: 7, kind: 0x0300c001, now: 11)
+    #expect(serviceRejected.events.contains { if case .rawEMGFailure = $0.payload { true } else { false } })
+    #expect(peer.session.streamsEnabled)
+}
+
+@Test func EMGDecoderOnlyInterpretsTheVerifiedLayout() throws {
+    let config = try EMGConfiguration(response: emgConfigReply())
+    #expect(config.isSupported)
+    let samples = (0..<128).reduce(into: Data()) { $0 += UInt16(32768 + $1).littleEndianData }
+    let payload = BandWire.field(1, 100) + BandWire.field(2, 1_000_000) + BandWire.field(3, samples)
+    let batch = try EMGBatch(payload: payload, configuration: config)
+    #expect(batch.sequence == 100 && batch.timestampUs == 1_000_000)
+    #expect(Array(batch.values.prefix(8)) == Array(32768...32775).map(UInt16.init))
+    #expect(batch.values[8] == 32776 && batch.values.last == 32895)
+    let compressed = try EMGConfiguration(response: emgConfigReply(encoding: 1))
+    #expect(!compressed.isSupported)
+    #expect(throws: BandProtocolError.self) { try EMGBatch(payload: payload, configuration: compressed) }
+    #expect(throws: BandProtocolError.self) { try EMGBatch(payload: payload.dropLast(), configuration: config) }
+    #expect(throws: BandProtocolError.self) { try EMGConfiguration(response: BandWire.field(2, 1)) }
+}
+
+private func batteryReply(id: UInt64, level: UInt64 = 84, charging: UInt64? = 1) -> Data {
+    var battery = BandWire.field(1, level)
+    if let charging { battery += BandWire.field(2, charging) }
+    return BandWire.field(1, id) + BandWire.field(2, 1) + BandWire.field(3, BandWire.field(1, battery))
+}
+
+@Test func batteryStatusReadsChargingWithoutChangingTheSensorSubscription() throws {
+    var peer = try Peer()
+    _ = try peer.exchange(channel: 5, kind: 0x02000315, payload: streamReply(id: 3))
+    let query = try #require(peer.requests(peer.session.queryBatteryStatus(at: 100)).first)
+    #expect(query.channel == 0x8008 && query.words == [0x8100ce56, 0x02000314])
+    #expect(query.payload == Data(hex: "08011200"))
+    #expect(try peer.session.queryBatteryStatus(at: 101).isEmpty)
+    let unrelated = try peer.exchange(channel: 8, kind: 0x02000315, payload: batteryReply(id: 9))
+    #expect(!unrelated.events.contains { if case .batteryStatus = $0.payload { true } else { false } })
+    let charged = try peer.exchange(channel: 8, kind: 0x02000315, payload: batteryReply(id: 1))
+    #expect(charged.events.contains { if case .batteryStatus(let status) = $0.payload { status == BandBatteryStatus(level: 84, charging: true) } else { false } })
+    let next = try #require(peer.requests(peer.session.queryBatteryStatus(at: 105)).first)
+    #expect(next.channel == 0x8008 && next.words.isEmpty)
+    let off = try peer.exchange(channel: 8, kind: 0x02000315, payload: batteryReply(id: 2, charging: 0), now: 5)
+    #expect(off.events.contains { if case .batteryStatus(let status) = $0.payload { status?.charging == false } else { false } })
+    #expect(peer.session.streamsEnabled)
+}
+
+@Test func unavailableBatteryStatusNeverBreaksGestures() throws {
+    var peer = try Peer()
+    _ = try peer.exchange(channel: 5, kind: 0x02000315, payload: streamReply(id: 3))
+    _ = try peer.requests(peer.session.queryBatteryStatus(at: 100))
+    #expect(peer.session.tick(at: 104).contains { if case .batteryStatus(nil) = $0.payload { true } else { false } })
+    _ = try peer.requests(peer.session.queryBatteryStatus(at: 105))
+    let rejected = try peer.exchange(channel: 8, kind: 0x0300c001, now: 5)
+    #expect(rejected.events.contains { if case .batteryStatus(nil) = $0.payload { true } else { false } })
+    #expect(try peer.session.queryBatteryStatus(at: 110).isEmpty)
+    #expect(peer.session.streamsEnabled)
+    #expect(try peer.gyro(1_000_000, now: 10).contains { if case .dataSeen = $0.payload { true } else { false } })
+}
+
+@Test func batteryDecoderRejectsInvalidValuesAndKeepsAnAbsentChargingFlagUnknown() throws {
+    #expect(try BandBatteryStatus(response: batteryReply(id: 1, charging: nil)).charging == nil)
+    #expect(throws: BandProtocolError.self) { try BandBatteryStatus(response: batteryReply(id: 1, level: 101)) }
+    #expect(throws: BandProtocolError.self) { try BandBatteryStatus(response: batteryReply(id: 1, charging: 2)) }
+    #expect(throws: BandProtocolError.self) { try BandBatteryStatus(response: batteryReply(id: 1).dropLast()) }
+}
+
+/// Optional local replay; real sensor captures stay outside the repository's test fixtures.
+@Test func recordedEMGFramesMatchTheIndependentCaptureDecoder() throws {
+    guard let path = ProcessInfo.processInfo.environment["KINESIS_EMG_AUDIT_FILE"] else { return }
+    struct Fixture: Decodable {
+        let config: String
+        let payload: String
+        let sequence: UInt64
+        let timestamp: UInt64
+        let values: [UInt16]
+    }
+    let lines = try String(contentsOfFile: path, encoding: .utf8).split(separator: "\n")
+    #expect(!lines.isEmpty)
+    var values = 0
+    for line in lines {
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(line.utf8))
+        let config = try EMGConfiguration(response: Data(hex: fixture.config))
+        let decoded = try EMGBatch(payload: Data(hex: fixture.payload), configuration: config)
+        #expect(decoded.sequence == fixture.sequence)
+        #expect(decoded.timestampUs == fixture.timestamp)
+        #expect(decoded.values == fixture.values)
+        values += decoded.values.count
+    }
+    print("EMG capture replay: \(lines.count) batches, \(values) channel values matched exactly")
 }
