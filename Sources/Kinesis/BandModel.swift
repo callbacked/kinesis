@@ -139,10 +139,6 @@ final class BandModel: ObservableObject {
     /// Two presses this close in time and space are a double-click, as with a trackpad.
     static let doubleClickTime = 0.45
     static let doubleClickDistance = 6.0
-    /// Below this aim speed a pinch counts as a click on something held still, and
-    /// the click guard absorbs the drift that follows. Moving faster, it's tracking or a
-    /// drag, and nothing is held back.
-    static let guardBelowSpeed = 3.0
     private var cursorTicker: AnyCancellable?
     /// True while the band's data reaches the Mac late: a congested or blocked radio link.
     @Published private(set) var linkCongested = false
@@ -1203,7 +1199,7 @@ final class BandModel: ObservableObject {
         let actions = [message.action, message.derivedAction]
         if actions.contains(where: { ["release", "buttonRelease", "buttonHoldRelease"].contains($0) }) {
             if cursorPressedFingers.remove(message.finger) != nil {
-                if airPointer.speed < Self.guardBelowSpeed { airPointer.guardClick(at: message.receivedAt) }
+                if airPointer.approach != .tracking { airPointer.guardClick(at: message.receivedAt) }
                 if heldButton?.finger == message.finger { releaseHeldButton() }
             }
             if pinchedFinger == message.finger { pinchedFinger = nil }
@@ -1214,17 +1210,20 @@ final class BandModel: ObservableObject {
         guard actions.contains(where: { ["press", "buttonPress"].contains($0) }),
               !actions.contains("buttonHold"), cursorPressedFingers.insert(message.finger).inserted else { return }
         guard controls.trusted else { pause(); return }
-        // Holding still means aiming at something: absorb the drift that follows the pinch.
-        let aiming = airPointer.speed < Self.guardBelowSpeed
-        if aiming { airPointer.guardClick(at: message.receivedAt) }
+        // Movement from before the pinch lands before the press, not after it.
+        flushCursorMovement()
+        // Held still or settling onto a target: absorb the drift that follows the pinch.
+        // Tracking something that moves: hold nothing back.
+        let approach = airPointer.approach
+        if approach != .tracking { airPointer.guardClick(at: message.receivedAt) }
         pinchedFinger = message.finger
         let button: CGMouseButton = message.finger == "index" ? .left : .right
         // One button at a time, like a trackpad.
         if heldButton != nil { releaseHeldButton() }
-        // Aiming at something still, the press lands where the pointer was just before
-        // the pinch nudged the arm. Moving, it lands where the pointer is: looking back
-        // then would yank the pointer to where it was 0.15 s ago.
-        let aimedAt = aiming ? cursorTrail.last { $0.time <= message.receivedAt - Self.clickLookback }?.point : nil
+        // Held still, the press lands where the pointer was just before the pinch nudged
+        // the arm. Otherwise it lands where the pointer is: looking back while moving
+        // would yank the pointer to where it was 0.15 s ago.
+        let aimedAt = approach == .still ? cursorTrail.last { $0.time <= message.receivedAt - Self.clickLookback }?.point : nil
         let point = aimedAt ?? controls.cursorLocation
         var clicks = 1
         if let lastPress, let point, lastPress.button == button, now - lastPress.time <= Self.doubleClickTime,

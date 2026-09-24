@@ -476,10 +476,32 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     try await rig.aim(0)
     // Mid-sweep, the pinch arrives: the press must land where the pointer is now.
     try await rig.sweep(to: 6, from: (0, 0), seconds: 0.4, settle: 0)
-    let here = rig.pointer
     rig.gesture("index", "press")
     let press = try #require(rig.controls.clickPoints.last ?? nil)
-    #expect(abs(press.x - here.x) < 1 && abs(press.y - here.y) < 1)
+    #expect(press.x < 750 && rig.pointer == press)
+    // It keeps tracking: nothing is held back after the pinch.
+    try await rig.sweep(to: 9, from: (6, 0), seconds: 0.2, settle: 0)
+    try await Task.sleep(for: .milliseconds(40))
+    #expect(rig.pointer.x < press.x - 30)
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func slowingDownIntoAPinchClicksInPlaceAndIgnoresTheSettle() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    // Quick toward the target, then slowing onto it, then the pinch: as measured.
+    try await rig.sweep(to: 6, from: (0, 0), seconds: 0.3, settle: 0)
+    try await rig.sweep(to: 7, from: (6, 0), seconds: 0.15, settle: 0)
+    rig.gesture("index", "press")
+    // The movement from before the pinch lands first, and the press where it ends.
+    let press = try #require(rig.controls.clickPoints.last ?? nil)
+    #expect(press.x < 750 && rig.pointer == press)
+    // The arm drifts on half a degree as it settles. The pointer stays on the click.
+    try await rig.sweep(to: 7.5, from: (7, 0), seconds: 0.2, settle: 0)
+    try await Task.sleep(for: .milliseconds(40))
+    #expect(abs(rig.pointer.x - press.x) < 3)
     await rig.model.shutdown()
 }
 

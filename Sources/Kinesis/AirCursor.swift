@@ -95,6 +95,7 @@ struct AirPointer {
     private var elevationFilter = OneEuroFilter(minimumCutoff: 1.2, beta: 0.12)
     private var unwrappedAzimuth: Double?
     private var lastRawAzimuth = 0.0
+    private var lastRawElevation = 0.0
     private var lastTime: Double?
     private(set) var aim: ForearmAim?
     /// Movement not yet taken, already scaled by stillness and acceleration.
@@ -106,6 +107,8 @@ struct AirPointer {
     private var lastGyroTime: Double?
     /// Degrees per second the aim is turning, from the gyro, without wrist twist.
     private(set) var speed = 0.0
+    /// The last 200 ms of speed, to tell settling onto a target from tracking one.
+    private var recentSpeeds: [(time: Double, speed: Double)] = []
 
     /// 0 is the most responsive and 1 the steadiest.
     var steadiness = 0.5
@@ -132,26 +135,55 @@ struct AirPointer {
     static let clickGuard = 3.5...6.0
     static let clickGuardSeconds = 0.4
     private var clickGuardUntil = -Double.infinity
+    /// The arm's speed when the guard began. Slowing on from there is still the settle.
+    private var clickGuardSpeed = 0.0
 
     /// The stillness range at this moment, raised for a while after a pinch.
     func still(at time: Double) -> ClosedRange<Double> {
         let base = still
         let strength = max(0, min(1, (clickGuardUntil - time) / Self.clickGuardSeconds))
         guard strength > 0 else { return base }
-        let low = base.lowerBound + (Self.clickGuard.lowerBound - base.lowerBound) * strength
-        let high = base.upperBound + (Self.clickGuard.upperBound - base.upperBound) * strength
+        let guardLow = max(Self.clickGuard.lowerBound, clickGuardSpeed)
+        let guardHigh = guardLow + (Self.clickGuard.upperBound - Self.clickGuard.lowerBound)
+        let low = base.lowerBound + (guardLow - base.lowerBound) * strength
+        let high = base.upperBound + (guardHigh - base.upperBound) * strength
         return low...max(high, low + 0.1)
     }
 
-    /// A pinch or release happened: absorb the drift that follows it.
+    /// How the arm was moving when a pinch came.
+    enum Approach { case still, settling, tracking }
+
+    /// People slow down into a click, as with a mouse: pinches made "while moving" came
+    /// at 5 to 10°/s and falling from 13 to 24°/s 200 ms before (measured 2026-09-24).
+    /// Tracking something that moves keeps its speed.
+    var approach: Approach {
+        if speed < 3 { return .still }
+        let peak = recentSpeeds.map(\.speed).max() ?? speed
+        return speed < 15 && speed < peak * 0.8 ? .settling : .tracking
+    }
+
+    /// A pinch or release happened: absorb the drift that follows it. A pinch made
+    /// while slowing onto a target comes at up to 15°/s, so the guard starts at that
+    /// speed: the arm slowing on after the pinch is the same settle and moves nothing,
+    /// and speeding up again, as for a drag, gets through. The smoothing's lag is
+    /// dropped too. It would otherwise carry the pointer on past the click.
     mutating func guardClick(at time: Double) {
         clickGuardUntil = time + Self.clickGuardSeconds
+        clickGuardSpeed = speed
+        guard let azimuth = unwrappedAzimuth else { return }
+        azimuthFilter.reset()
+        elevationFilter.reset()
+        aim = ForearmAim(azimuth: azimuthFilter.filter(azimuth, dt: 0), elevation: elevationFilter.filter(lastRawElevation, dt: 0))
+        pending = .zero
     }
 
     /// How much of the aim's movement reaches the pointer at this moment: 0 when held still, 1 when moving.
     func motion(at time: Double) -> Double {
         let range = still(at: time)
-        let x = max(0, min(1, (gateSpeed - range.lowerBound) / (range.upperBound - range.lowerBound)))
+        // During a click guard the arm's own speed decides: the held-over speed that lets
+        // the smoothing finish a flick would let it finish past the click instead.
+        let judged = time < clickGuardUntil ? speed : gateSpeed
+        let x = max(0, min(1, (judged - range.lowerBound) / (range.upperBound - range.lowerBound)))
         return x * x * (3 - 2 * x)
     }
 
@@ -169,6 +201,8 @@ struct AirPointer {
         let rate = (corrected.x * corrected.x + corrected.z * corrected.z).squareRoot()
         speed += (rate - speed) * (1 - exp(-dt / 0.1))
         gateSpeed = max(speed, gateSpeed * exp(-dt / 0.15))
+        recentSpeeds.append((time, speed))
+        recentSpeeds.removeAll { time - $0.time > 0.2 }
     }
 
     /// Takes one orientation sample. Returns false after a gap, whose movement is dropped.
@@ -182,6 +216,7 @@ struct AirPointer {
             elevationFilter.reset()
             unwrappedAzimuth = sample.azimuth
             lastRawAzimuth = sample.azimuth
+            lastRawElevation = sample.elevation
             let start = SIMD2(azimuthFilter.filter(sample.azimuth, dt: 0), elevationFilter.filter(sample.elevation, dt: 0))
             pending = .zero
             aim = ForearmAim(azimuth: start.x, elevation: start.y)
@@ -192,6 +227,7 @@ struct AirPointer {
             unwrappedAzimuth! += remainder(sample.azimuth - lastRawAzimuth, 360)
         }
         lastRawAzimuth = sample.azimuth
+        lastRawElevation = sample.elevation
         let next = ForearmAim(azimuth: azimuthFilter.filter(unwrappedAzimuth!, dt: gap),
                               elevation: elevationFilter.filter(sample.elevation, dt: gap))
         if let previous = aim {
