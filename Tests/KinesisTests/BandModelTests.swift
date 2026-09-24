@@ -8,6 +8,12 @@ import KinesisCore
 @MainActor private final class RecordedConnection: BandConnection {
     private var onEvent: ((BandEvent) -> Void)?
     private var onEnd: ((Error?) -> Void)?
+    var rawEMGMode = false
+    var rawWriteError: Error?
+    func setRawEMGEnabled(_ enabled: Bool) throws {
+        rawEMGMode = enabled
+        if let rawWriteError { throw rawWriteError }
+    }
     private(set) var requests: [String] = []
     var starts: Int { requests.count }
     private(set) var stops = 0
@@ -1243,5 +1249,144 @@ private struct FakePairClient: BandPairClient {
     enrolled.forgetEverything()
     #expect(enrolled.showsPairAction && !enrolled.hasBandIdentity && enrolled.selectedAddress.isEmpty)
     await enrolled.shutdown()
+    await model.shutdown()
+}
+
+@Test @MainActor func anAcknowledgedSubscriptionWithoutDataShowsTheWristHintUntilFramesArrive() async throws {
+    let defaults = MemoryDefaults()
+    defaults.set(true, forKey: "setupCompleted")
+    var now = 100.0
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { now })
+    model.selectedAddress = "test-band"
+    model.connect()
+    connection.send(.connected)
+    // The acknowledgement's own liveness and the periodic status replies must
+    // not count as data: the band is subscribed, but nothing streams.
+    connection.send(.heartbeat, at: 100.2)
+    now += 9
+    connection.send(.heartbeat, at: now)
+    #expect(model.streamHint == nil)
+    now += 1.5
+    connection.send(.battery(80))
+    #expect(model.streamHint == "subscribed but no data — is the band on your wrist and off the charger?")
+    // The first real frame clears it, and it stays clear once data flows.
+    connection.send(.dataSeen)
+    #expect(model.streamHint == nil)
+    now += 20
+    connection.send(.battery(81))
+    #expect(model.streamHint == nil)
+    await model.shutdown()
+}
+
+@Test @MainActor func chargingUsesTheReportedFlagEvenWhenBatteryPercentageIsFlat() async {
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: MemoryDefaults(), connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.selectedAddress = "test-band"
+    model.connect()
+    connection.send(.connected)
+    connection.send(.battery(80))
+    connection.send(.battery(81))
+    #expect(model.chargeState == .unknown) // A rising level isn't a charger sensor.
+    connection.send(.batteryStatus(BandBatteryStatus(level: 81, charging: true)))
+    #expect(model.chargeState == .charging && model.battery == 81)
+    connection.send(.battery(81))
+    #expect(model.chargeState == .charging)
+    connection.send(.batteryStatus(BandBatteryStatus(level: 81, charging: false)))
+    #expect(model.chargeState == .onBattery)
+    connection.send(.batteryStatus(BandBatteryStatus(level: 100, charging: false)))
+    #expect(model.chargeState == .full)
+    connection.send(.batteryStatus(BandBatteryStatus(level: 100, charging: true)))
+    #expect(model.chargeState == .charging)
+    connection.send(.batteryStatus(nil))
+    connection.send(.battery(90))
+    #expect(model.chargeState == .unknown && model.battery == 90)
+    connection.send(.batteryStatus(BandBatteryStatus(level: 90, charging: true)))
+    connection.send(.disconnected)
+    #expect(model.chargeState == .unknown)
+    await model.shutdown()
+}
+
+@Test @MainActor func developerModeControlsReadingsWithoutReconnectingAndFlushesRecording() async throws {
+    let defaults = MemoryDefaults()
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.selectedAddress = "test-band"
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    #expect(!model.developerMode && !connection.rawEMGMode)
+    model.developerMode = true
+    model.rawEMGEnabled = true
+    #expect(connection.rawEMGMode && model.rawEMGChanging)
+    #expect(connection.starts == 1 && connection.stops == 0)
+    connection.send(.rawEMGState(true))
+    #expect(model.rawEMGActive && !model.rawEMGChanging)
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("kinesis-emg-test-\(UUID()).jsonl")
+    defer { try? FileManager.default.removeItem(at: url) }
+    model.startRawRecording(to: url)
+    // Stop before the periodic flush. Both frames still have to reach disk, in order.
+    connection.send(.rawEMGFrame(Data([1, 2, 3])))
+    connection.send(.rawEMGFrame(Data([4, 5, 6])))
+    model.developerMode = false
+    #expect(!model.rawEMGEnabled && !connection.rawEMGMode && model.rawRecordingURL == nil)
+    #expect(connection.starts == 1 && connection.stops == 0)
+    connection.send(.rawEMGState(false))
+    #expect(!model.rawEMGActive)
+    await model.shutdown()
+    #expect(model.rawRecordedFrames == 2)
+    let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+    #expect(lines.count == 2)
+    let first = try JSONSerialization.jsonObject(with: Data(lines[0].utf8)) as? [String: Any]
+    let second = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: Any]
+    #expect(first?["payload"] as? String == "010203")
+    #expect(second?["payload"] as? String == "040506")
+    #expect(!defaults.bool(forKey: "developerMode") && !defaults.bool(forKey: "rawEMGEnabled"))
+}
+
+@Test @MainActor func disabledDeveloperModeDoesNotRestoreAHiddenEMGSubscription() async {
+    let defaults = MemoryDefaults()
+    defaults.set(true, forKey: "rawEMGEnabled")
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: defaults, connection: connection, sessionStore: SavedSessionStore())
+    #expect(!model.developerMode && !model.rawEMGEnabled && !connection.rawEMGMode)
+    await model.shutdown()
+}
+
+@Test @MainActor func turningDeveloperModeOffDuringAnEMGRequestWaitsThenDisablesIt() async {
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: MemoryDefaults(), connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.selectedAddress = "test-band"
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    model.developerMode = true
+    model.rawEMGEnabled = true
+    connection.rawWriteError = KinesisError(message: "Request in progress")
+    model.developerMode = false
+    #expect(model.rawEMGChanging && model.rawEMGError == nil)
+    connection.rawWriteError = nil
+    connection.send(.rawEMGFailure("Timed out"))
+    #expect(!connection.rawEMGMode && model.rawEMGChanging)
+    connection.send(.rawEMGState(false))
+    #expect(!model.rawEMGActive && !model.rawEMGChanging && model.rawEMGError == nil)
+    #expect(connection.starts == 1 && connection.stops == 0)
+    await model.shutdown()
+}
+
+@Test @MainActor func aDroppedEMGSessionReconnectsWithReadingsOff() async throws {
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: MemoryDefaults(), connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.selectedAddress = "test-band"
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    model.developerMode = true
+    model.rawEMGEnabled = true
+    connection.send(.rawEMGState(true))
+    connection.finish(error: KinesisError(message: "The band dropped the combined subscription"))
+    try await waitUntil { connection.starts == 2 }
+    #expect(!model.rawEMGEnabled && !connection.rawEMGMode)
+    #expect(model.developerMode && !model.rawEMGActive)
     await model.shutdown()
 }

@@ -27,7 +27,7 @@ output_dir="$stage_dir/release"
 mkdir -p "$source_dir/design" "$output_dir"
 # Copy only the source release, never the workspace or its local recordings.
 rsync -a --exclude='.DS_Store' Sources Tests Packaging scripts docs "$source_dir/"
-cp Package.swift README.md .gitignore "$source_dir/"
+cp Package.swift README.md LICENSE .gitignore "$source_dir/"
 cp design/kinesis-links*.svg "$source_dir/design/"
 ditto -c -k --norsrc --noextattr --keepParent "$source_dir" "$output_dir/kinesis-$version-source.zip"
 ditto -c -k --norsrc --noextattr --keepParent dist/Kinesis.app "$output_dir/Kinesis-$version-local.zip"

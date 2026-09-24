@@ -9,7 +9,7 @@ struct BandPage: View {
     @State private var remindingToReset = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 30) {
+        VStack(alignment: .leading, spacing: 26) {
             Text("just you and your band.").font(KinesisType.title).tracking(-1.2).reveal(0)
             if model.showsPairAction {
                 // Until the band is paired, pairing is the whole page.
@@ -43,8 +43,12 @@ struct BandPage: View {
                     }
                 }.reveal(3)
             }
+            OpenRow(title: "developer mode",
+                    detail: "unlocks the readings tab for live EMG and raw recording.") {
+                Toggle("Developer mode", isOn: $model.developerMode).toggleStyle(KinesisToggleStyle())
+            }.reveal(4)
             Text("the connection stays on this Mac. no glasses or phone needed.")
-                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.85)).reveal(4)
+                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.85)).reveal(5)
         }
         .confirmationDialog("forget this band?", isPresented: $confirmingForget, titleVisibility: .visible) {
             Button("forget band", role: .destructive) {

@@ -9,6 +9,8 @@ import KinesisCore
 @MainActor private final class StagedConnection: BandConnection {
     private var onEvent: ((BandEvent) -> Void)?
     private var onEnd: ((Error?) -> Void)?
+    var rawEMGMode = false
+    func setRawEMGEnabled(_ enabled: Bool) throws { rawEMGMode = enabled }
     func start(_ operation: BandOperation, onEvent: @escaping (BandEvent) -> Void,
                onEnd: @escaping (Error?) -> Void) throws {
         self.onEvent = onEvent
@@ -47,7 +49,7 @@ private struct AllowedControls: MacControls {
     let band = "render-\(UUID().uuidString)"
     defer { BandIdentity.delete(for: band) }
 
-    func model(paired: Bool, live: Bool, trusted: Bool = true, turning: Bool = false) throws -> BandModel {
+    func model(paired: Bool, live: Bool, trusted: Bool = true, turning: Bool = false, emg: Bool = false) throws -> BandModel {
         let defaults = MemoryDefaults()
         defaults.set(true, forKey: "setupCompleted")
         defaults.set(1284, forKey: "totalGestureCount")
@@ -67,6 +69,13 @@ private struct AllowedControls: MacControls {
             model.toggleControls()
             // A held pinch lights the accent everywhere it lives: the hand, the electrodes, the row.
             if turning { connection.send(.dialState(true)) }
+            if emg {
+                model.developerMode = true
+                model.rawEMGEnabled = true
+                connection.send(.rawEMGState(true))
+                connection.send(.rawEMGConfiguration(try readingsConfiguration()))
+                for sequence in 0..<128 { connection.send(.rawEMGFrame(readingsPayload(sequence: UInt64(sequence)))) }
+            }
         }
         return model
     }
@@ -108,8 +117,16 @@ private struct AllowedControls: MacControls {
         SetupView(model: model, step: step).background(Field()).foregroundStyle(KinesisStyle.ink)
     }
 
+    func readings(active: Bool) throws -> BandModel {
+        let result = try model(paired: true, live: true, emg: active)
+        result.developerMode = true
+        return result
+    }
+
     let smallest = CGSize(width: 920, height: 660)
     let edges: [(String, AnyView)] = [
+        ("readings-empty", AnyView(MainView(model: try readings(active: false), page: .readings, scrolls: false))),
+        ("readings-synthetic-live", AnyView(MainView(model: try readings(active: true), page: .readings, scrolls: false))),
         ("edge-strained-overview", AnyView(MainView(model: try strained(), scrolls: false))),
         ("edge-strained-band", AnyView(MainView(model: try strained(), page: .band, scrolls: false))),
         ("edge-waiting-for-macos", AnyView(MainView(model: try waitingForMacOS(), page: .band, scrolls: false))),

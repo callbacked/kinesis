@@ -21,14 +21,23 @@ public struct BandEvent: Sendable {
     public enum Payload: Sendable {
         case devices([BandDevice])
         case battery(Int)
+        case batteryStatus(BandBatteryStatus?)
         case preparing, connected, disconnected, heartbeat
         case gesture(BandGesture)
         case dialState(Bool)
         case dialTurn(Double)
+        /// A decoded sensor data frame arrived (gesture, motion, orientation, or
+        /// raw emg). Tells streaming data apart from ack-only liveness.
+        case dataSeen
         case handedness(BandHand)
         case handednessFailure(String)
         case ceremonyHTTP(CeremonyHTTPRequest)
         case ceremonyStage(String)
+        /// One decrypted raw emg sample frame. Sensor data only; no key material rides this path.
+        case rawEMGFrame(Data)
+        case rawEMGConfiguration(EMGConfiguration)
+        case rawEMGState(Bool)
+        case rawEMGFailure(String)
         /// The input channel read is waiting on a system Bluetooth pairing request.
         case systemPairingPending
     }

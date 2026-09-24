@@ -33,6 +33,7 @@ mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/Resources"
 cp "$binary_dir/Kinesis" "$staged_app/Contents/MacOS/Kinesis"
 cp -R "$binary_dir/Kinesis_Kinesis.bundle" "$staged_app/Contents/Resources/"
 cp Packaging/Info.plist "$staged_app/Contents/Info.plist"
+cp LICENSE "$staged_app/Contents/Resources/LICENSE"
 swiftc -parse-as-library Sources/Kinesis/KinesisMark.swift scripts/export-icon.swift -o .build/tools/export-icon
 .build/tools/export-icon "$stage_dir/Kinesis.iconset"
 iconutil -c icns "$stage_dir/Kinesis.iconset" -o "$staged_app/Contents/Resources/Kinesis.icns"

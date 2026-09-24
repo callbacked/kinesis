@@ -36,6 +36,8 @@ choose your hand during setup or under **band**. kinesis reads the band's curren
 
 **overview** shows your gestures, **gestures** holds the assignments, and **band** has the connection details. the appearance menu switches between light, dark, and your system setting.
 
+turn on **developer mode** at the bottom of **band** to unlock **readings**. it shows raw sEMG readings across eight channels and lets you record the stream. readings can be toggled on an existing connection. after a disconnection, turn them on again to resume. the battery readout also shows charging status when the band reports it.
+
 the column on the left keeps a running count of recognized swipes and taps, saved on this mac across launches. duplicate packets and individual dial ticks aren't added to the count.
 
 ## controls
@@ -59,7 +61,7 @@ desktop and mission control actions use the standard control + arrow shortcuts. 
 
 ## under the hood
 
-swiftui window and menu bar, corebluetooth for the band connection, and swift decoding of the gesture + motion stream from the poc. no raw semg recording in this client. stale input and duplicate gesture messages are filtered before controls run; reconnects don't replay old gestures.
+swiftui window and menu bar, corebluetooth for the band connection, and swift decoding of the gesture + motion stream from the poc. developer mode adds raw sEMG readings and local JSONL recording. stale input and duplicate gesture messages are filtered before controls run; reconnects don't replay old gestures.
 
 the app shows which command it sent. that isn't confirmation that another app acted on it. the dial is relative wrist motion, with adjustable sensitivity, rather than a tracked hand pose.
 

@@ -4,7 +4,7 @@ import KinesisCore
 /// One type scale for the whole app. Large and light for what matters, small
 /// and grey for what supports it.
 enum KinesisType {
-    static let title = Font.system(size: 32, weight: .regular)
+    static let title = Font.system(size: 32, weight: .light)
     static let headline = Font.system(size: 21, weight: .regular)
     static let lead = Font.system(size: 15, weight: .regular)
     static let body = Font.system(size: 13, weight: .regular)
@@ -128,11 +128,10 @@ struct PillTray<Value: Hashable>: View {
                 } label: {
                     Text(option.title).font(KinesisType.label)
                         .foregroundStyle(chosen ? KinesisStyle.ink : KinesisStyle.secondary)
-                        .padding(.horizontal, 15).padding(.vertical, 7)
+                        .padding(.horizontal, 17).padding(.vertical, 7)
                         .background {
                             if chosen {
-                                Capsule().fill(KinesisStyle.chip)
-                                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                                PillSurface(fill: KinesisStyle.chip, raised: true)
                                     .matchedGeometryEffect(id: "choice", in: tray)
                             }
                         }
@@ -141,8 +140,8 @@ struct PillTray<Value: Hashable>: View {
                     .accessibilityAddTraits(chosen ? .isSelected : [])
             }
         }
-        .padding(3)
-        .background(KinesisStyle.tray, in: Capsule())
+        .padding(4)
+        .background(PillSurface(fill: KinesisStyle.tray))
         .opacity(enabled ? 1 : 0.45)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(label)
@@ -169,14 +168,15 @@ struct PillMenu<Value: Hashable>: View {
                 }
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Text(options.first { $0.value == selection }?.title ?? "")
                     .font(KinesisType.label).lineLimit(1)
+                Rectangle().fill(KinesisStyle.line).frame(width: 0.75, height: 13)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(KinesisStyle.secondary)
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
-            .background(hovered ? KinesisStyle.trayHover : KinesisStyle.tray, in: Capsule())
+            .background(PillSurface(fill: hovered ? KinesisStyle.trayHover : KinesisStyle.tray, raised: hovered))
             .contentShape(Capsule())
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
@@ -197,7 +197,7 @@ struct KinesisToggleStyle: ToggleStyle {
         Button {
             configuration.isOn.toggle()
         } label: {
-            Capsule().fill(configuration.isOn ? KinesisStyle.accent : KinesisStyle.trayStrong)
+            PillSurface(fill: configuration.isOn ? KinesisStyle.accent : KinesisStyle.trayStrong)
                 .frame(width: 40, height: 23)
                 .overlay(alignment: configuration.isOn ? .trailing : .leading) {
                     Circle().fill(.white).padding(2.5)
@@ -227,7 +227,7 @@ struct PillSlider: View {
             let knob = 20.0
             let travel = max(geometry.size.width - knob, 1)
             ZStack(alignment: .leading) {
-                Capsule().fill(KinesisStyle.tray).frame(height: 8)
+                PillSurface(fill: KinesisStyle.tray).frame(height: 8)
                 Capsule().fill(KinesisStyle.accent).frame(width: knob / 2 + travel * fraction, height: 8)
                 Circle().fill(.white).frame(width: knob, height: knob)
                     .shadow(color: .black.opacity(0.25), radius: dragging ? 5 : 2, y: 1)
@@ -279,12 +279,13 @@ struct TextTabs<Value: Hashable>: View {
                     withAnimation(reduceMotion ? nil : KinesisMotion.select) { selection = option.value }
                 } label: {
                     Text(option.title).font(.system(size: 15, weight: .medium))
+                        .tracking(-0.2)
                         .foregroundStyle(chosen || hovered == option.value ? KinesisStyle.ink : KinesisStyle.secondary)
                         .opacity(chosen || hovered != option.value ? 1 : 0.8)
                         .padding(.vertical, 9)
                         .overlay(alignment: .bottom) {
                             if chosen {
-                                Capsule().fill(KinesisStyle.ink).frame(height: 2)
+                                Capsule().fill(KinesisStyle.ink).frame(height: 1.5)
                                     .matchedGeometryEffect(id: "tab", in: tabs)
                             }
                         }
@@ -301,15 +302,21 @@ struct TextTabs<Value: Hashable>: View {
 /// A value over its name, the way the band's column reports battery and gestures.
 struct Readout: View {
     let symbol: String
+    /// A small extra mark after the value, such as the bolt over a charging battery.
+    var statusSymbol: String? = nil
     let value: String
     let label: String
     var alignment = HorizontalAlignment.leading
     var body: some View {
         VStack(alignment: alignment, spacing: 5) {
-            HStack(spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: symbol).font(.system(size: 12, weight: .medium))
-                Text(value).font(.system(size: 15, weight: .medium)).monospacedDigit()
+                Text(value).font(.system(size: 18, weight: .regular)).monospacedDigit().tracking(-0.4)
                     .contentTransition(.numericText())
+                if let statusSymbol {
+                    Image(systemName: statusSymbol).font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(KinesisStyle.green).transition(.opacity)
+                }
             }.foregroundStyle(KinesisStyle.ink.opacity(0.92))
             Text(label).font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary.opacity(0.85))
         }.accessibilityElement(children: .combine)
@@ -360,7 +367,7 @@ struct Flash<Content: View>: View {
 struct SectionLabel: View {
     let text: String
     var body: some View {
-        Text(text).font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
+        Text(text).font(KinesisType.micro).tracking(0.3).foregroundStyle(KinesisStyle.secondary)
             .accessibilityAddTraits(.isHeader)
     }
 }
@@ -385,7 +392,7 @@ struct OpenRow<Control: View>: View {
                     .foregroundStyle(KinesisStyle.secondary)
                     .overlay(Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(KinesisStyle.accent).opacity(glow))
             }
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.system(size: 15)).foregroundStyle(KinesisStyle.ink)
                     .overlay(alignment: .leading) { Text(title).font(.system(size: 15)).foregroundStyle(KinesisStyle.accent).opacity(glow) }
                 if let detail {
@@ -396,7 +403,7 @@ struct OpenRow<Control: View>: View {
             Spacer(minLength: 12)
             control
         }
-        .padding(.vertical, detail == nil ? 13 : 15).padding(.horizontal, 14)
+        .padding(.vertical, detail == nil ? 12 : 13).padding(.horizontal, 14)
         .background(RoundedRectangle(cornerRadius: 13).fill(hovered ? KinesisStyle.tray : .clear))
         .background(RoundedRectangle(cornerRadius: 13).fill(KinesisStyle.accent.opacity(0.13 * glow)))
         // The band bleeds past the text, so titles still line up with the page edge.

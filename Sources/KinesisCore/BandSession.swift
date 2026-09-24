@@ -29,10 +29,29 @@ public final class BandSession {
     public private(set) var authenticatedPackets = 0
     public private(set) var motionMessages = 0
     public private(set) var streamsEnabled = false
-    // Keep these together: enable, disable, and acknowledgement must agree.
     private let streamFields = [3, 6, 8]
     private let streamChannel: UInt16 = 0x8005
     private let configurationChannel: UInt16 = 0x8006
+    private let configServiceChannel: UInt16 = 0x8007
+    private let batteryChannel: UInt16 = 0x8008
+    private var batteryChannelOpened = false
+    private var batteryRequestID: UInt64 = 0
+    private var batteryRequest: (id: UInt64, deadline: Double)?
+    private var batteryUnavailable = false
+    private var rawEMG: Bool
+    private var rawRequested = false
+    private var configServiceOpened = false
+    private var rawRequestID: UInt64 = 6
+    private enum RawStage { case config, query, update }
+    private struct RawRequest {
+        let enabled: Bool
+        var stage: RawStage
+        var id: UInt64
+        let deadline: Double
+    }
+    private var rawRequest: RawRequest?
+    public private(set) var rawEMGFrames = 0
+    public private(set) var rawEMGBytes = 0
     private enum SetupStage { case link, ceremony, identity, deviceInfo, input }
     private var setupStage = SetupStage.link
     private var enrollment: BandEnrollmentIdentity?
@@ -52,9 +71,10 @@ public final class BandSession {
     private let log = Logger(subsystem: "local.callbacked.kinesis", category: "protocol")
     private var startupFrames = 0
 
-    public init(enrollment: BandEnrollmentIdentity? = nil, ceremony: OwnershipCeremony? = nil) throws {
+    public init(enrollment: BandEnrollmentIdentity? = nil, ceremony: OwnershipCeremony? = nil, rawEMG: Bool = false) throws {
         self.enrollment = enrollment
         self.ceremony = ceremony
+        self.rawEMG = rawEMG
         privateKey = P256.KeyAgreement.PrivateKey()
         challenge = try Self.random(16)
         seed = try Self.random(32)
@@ -160,7 +180,41 @@ public final class BandSession {
             hand = nil
             events.append(BandEvent(.handednessFailure("Couldn't confirm the band hand. Reconnect and try again."), at: time))
         }
+        if let batteryRequest, time >= batteryRequest.deadline, !stopping {
+            self.batteryRequest = nil
+            events.append(BandEvent(.batteryStatus(nil), at: time))
+        }
+        if let rawRequest, time >= rawRequest.deadline, !stopping {
+            self.rawRequest = nil
+            events.append(BandEvent(.rawEMGFailure("The band didn't confirm the EMG change. Turn readings off, then try again."), at: time))
+        }
         return events
+    }
+
+    /// Update the existing input subscription. Gesture and motion flags stay on.
+    public func setRawEMGEnabled(_ enabled: Bool, at time: Double) throws -> Data {
+        guard !stopping else { throw BandProtocolError("Wait for the band to reconnect before changing readings.") }
+        guard rawRequest == nil else { throw BandProtocolError("Wait for the current EMG change to finish.") }
+        rawEMG = enabled
+        guard streamsEnabled else { return Data() }
+        rawRequestID += 1
+        rawRequest = RawRequest(enabled: enabled, stage: enabled ? .config : .update,
+                                id: rawRequestID, deadline: time + 8)
+        if enabled {
+            let words: [UInt32] = configServiceOpened ? [] : [0x8100ce56, 0x02000314]
+            configServiceOpened = true
+            return try encrypt(BandWire.frame(channel: configServiceChannel, words: words,
+                payload: BandWire.field(1, rawRequestID) + BandWire.field(5, Data())))
+        }
+        return try rawStreamUpdate(id: rawRequestID, enabled: false)
+    }
+
+    private func rawStreamUpdate(id: UInt64, enabled: Bool) throws -> Data {
+        rawRequested = true
+        let control = BandWire.field(2, enabled ? 1 : 0)
+            + streamFields.reduce(into: Data()) { $0 += BandWire.field($1, 1) }
+        return try encrypt(BandWire.frame(channel: streamChannel, words: [],
+            payload: BandWire.field(1, id) + BandWire.field(4, control)))
     }
 
     public func setHandedness(_ hand: BandHand, at time: Double) throws -> Data {
@@ -217,9 +271,20 @@ public final class BandSession {
         return events
     }
 
+    /// BatteryInfoReq is an empty read request, separate from sensor subscriptions.
+    public func queryBatteryStatus(at time: Double) throws -> Data {
+        guard streamsEnabled, !stopping, !batteryUnavailable, batteryRequest == nil else { return Data() }
+        batteryRequestID += 1
+        batteryRequest = (batteryRequestID, time + 3)
+        let words: [UInt32] = batteryChannelOpened ? [] : [0x8100ce56, 0x02000314]
+        batteryChannelOpened = true
+        return try encrypt(BandWire.frame(channel: batteryChannel, words: words,
+            payload: BandWire.field(1, batteryRequestID) + BandWire.field(2, Data())))
+    }
+
     /// Read the existing subscription's status when sensor traffic goes quiet.
     public func queryStreamState() throws -> Data {
-        guard streamsEnabled, !stopping else { return Data() }
+        guard streamsEnabled, !stopping, rawRequest == nil else { return Data() }
         return try streamRequest(id: 5, enabled: nil)
     }
 
@@ -227,6 +292,8 @@ public final class BandSession {
         guard !stopping else { return Data() }
         stopping = true
         handRequest = nil
+        rawRequest = nil
+        batteryRequest = nil
         guard transmitter != nil, setupStage == .input else { return Data() }
         return try streamRequest(id: 4, enabled: false)
     }
@@ -356,7 +423,8 @@ public final class BandSession {
     }
 
     private func streamRequest(id: UInt64, enabled: Bool?) throws -> Data {
-        let control = enabled.map { enabled in streamFields.reduce(into: Data()) { $0 += BandWire.field($1, enabled ? 1 : 0) } } ?? Data()
+        let selectedFields = enabled == false && rawRequested ? [2] + streamFields : streamFields
+        let control = enabled.map { enabled in selectedFields.reduce(into: Data()) { $0 += BandWire.field($1, enabled ? 1 : 0) } } ?? Data()
         return try encrypt(BandWire.frame(channel: streamChannel, words: id == 2 ? [0x8100ce56, 0x02000314] : [],
             payload: BandWire.field(1, id) + BandWire.field(4, control)))
     }
@@ -397,9 +465,28 @@ public final class BandSession {
                 BandWire.field(1, 1) + BandWire.field(3, Data()))))
             return []
         }
+        if frame.channel & 0x7fff == batteryChannel & 0x7fff, !stopping {
+            if kind == 0x0300c001 {
+                batteryRequest = nil
+                batteryUnavailable = true
+                return [BandEvent(.batteryStatus(nil), at: time)]
+            }
+            if kind == 0x02000315, let request = batteryRequest {
+                // Optional status errors must not interrupt gestures or EMG.
+                guard let fields = try? ProtoFields(frame.payload),
+                      (try? fields.requiredInteger(1)) == request.id else { return [] }
+                batteryRequest = nil
+                return [BandEvent(.batteryStatus(try? BandBatteryStatus(response: frame.payload)), at: time)]
+            }
+            return []
+        }
         if kind == 0x0300c001, !stopping {
             if frame.channel == 3, setupStage == .deviceInfo {
                 throw BandProtocolError("The band rejected gesture setup. Try reconnecting.")
+            }
+            if let rawRequest, frame.channel == 7 || (frame.channel == 5 && rawRequest.stage != .config) {
+                self.rawRequest = nil
+                return [BandEvent(.rawEMGFailure("The band rejected the EMG request."), at: time)]
             }
             if frame.channel == 5, setupStage == .input {
                 throw BandProtocolError("The band rejected the input subscription. Try reconnecting.")
@@ -412,7 +499,7 @@ public final class BandSession {
             return []
         }
         // Ignore unrelated services without trying to interpret their protobuf schema.
-        guard [0x02000315, 0x0200020d, 0x0200020f, 0x02000212].contains(kind) else { return [] }
+        guard [0x02000315, 0x0200020a, 0x0200020d, 0x0200020f, 0x02000212].contains(kind) else { return [] }
         if kind == 0x02000315, frame.channel == 3, setupStage == .deviceInfo, !stopping {
             let fields = try ProtoFields(frame.payload)
             guard try fields.requiredInteger(1) == 1 else { return [] }
@@ -430,9 +517,49 @@ public final class BandSession {
             guard !stopping else { return [] }
             return try receiveHand(ProtoFields(frame.payload), at: time, outgoing: &outgoing)
         }
+        if kind == 0x02000315, let pending = rawRequest, !stopping {
+            let fields = try ProtoFields(frame.payload)
+            let expectedChannel = pending.stage == .config ? configServiceChannel : streamChannel
+            if frame.channel & 0x7fff == expectedChannel & 0x7fff, try fields.integer(1) == pending.id {
+                guard try fields.integer(2) == 1 else {
+                    rawRequest = nil
+                    return [BandEvent(.rawEMGFailure("The band rejected the EMG change. Gestures remain requested."), at: time)]
+                }
+                switch pending.stage {
+                case .config:
+                    let config: EMGConfiguration
+                    do { config = try EMGConfiguration(response: frame.payload) }
+                    catch {
+                        rawRequest = nil
+                        return [BandEvent(.rawEMGFailure("The band didn't provide a readable EMG configuration."), at: time)]
+                    }
+                    rawRequestID += 1
+                    rawRequest?.stage = .query
+                    rawRequest?.id = rawRequestID
+                    outgoing.append(try streamRequest(id: rawRequestID, enabled: nil))
+                    return [BandEvent(.rawEMGConfiguration(config), at: time)]
+                case .query:
+                    rawRequestID += 1
+                    rawRequest?.stage = .update
+                    rawRequest?.id = rawRequestID
+                    outgoing.append(try rawStreamUpdate(id: rawRequestID, enabled: pending.enabled))
+                case .update:
+                    rawRequest = nil
+                    let flags = try ProtoFields(fields.bytes(5))
+                    guard try streamFields.allSatisfy({ try flags.integer($0) == 1 }) else {
+                        throw BandProtocolError("The band stopped gesture streams during the EMG change. Reconnect with readings off.")
+                    }
+                    guard try flags.integer(2) == (pending.enabled ? 1 : 0) else {
+                        return [BandEvent(.rawEMGFailure("The band didn't accept EMG alongside gestures."), at: time)]
+                    }
+                    return [BandEvent(.rawEMGState(pending.enabled), at: time)]
+                }
+                return []
+            }
+        }
         if kind == 0x02000315, frame.channel != (streamChannel & 0x7fff) { return [] }
-        let fields = try ProtoFields(frame.payload)
         if kind == 0x02000315 {
+            let fields = try ProtoFields(frame.payload)
             let request = try fields.integer(1)
             if request == 3 || request == 5 {
                 guard !stopping else { return [] }
@@ -442,17 +569,36 @@ public final class BandSession {
                 let flags = try ProtoFields(fields.bytes(5))
                 streamsEnabled = try streamFields.allSatisfy { try flags.contains($0) && flags.integer($0) == 1 }
                 guard streamsEnabled else { throw BandProtocolError("The band input subscription stopped") }
+                if request == 3, rawEMG, rawRequest == nil {
+                    outgoing.append(try setRawEMGEnabled(true, at: time))
+                }
                 if !streaming {
                     streaming = true
                     return [BandEvent(.connected, at: time)]
                 }
             } else if request == 4, try fields.integer(2) == 1, fields.contains(5) {
                 let flags = try ProtoFields(fields.bytes(5))
-                stopAcknowledged = try streamFields.allSatisfy { try flags.contains($0) && flags.integer($0) == 0 }
+                stopAcknowledged = try (rawRequested ? [2] + streamFields : streamFields).allSatisfy { try flags.contains($0) && flags.integer($0) == 0 }
             }
             return []
         }
         guard !stopping else { return [] }
+        if kind == 0x0200020a {
+            // Keep the original payload for recordings, including unknown encodings.
+            rawEMGFrames += 1
+            rawEMGBytes += frame.payload.count
+            var events: [BandEvent] = []
+            if !streaming {
+                streaming = true
+                events.append(BandEvent(.connected, at: time))
+                events.append(BandEvent(.heartbeat, at: time))
+                lastHeartbeat = time
+            }
+            events.append(BandEvent(.rawEMGFrame(frame.payload), at: time))
+            events.append(BandEvent(.dataSeen, at: time))
+            return events
+        }
+        let fields = try ProtoFields(frame.payload)
         let sequence = try fields.requiredInteger(1)
         let timestamp = try fields.requiredInteger(2)
         var events: [BandEvent] = []
@@ -501,6 +647,7 @@ public final class BandSession {
                 }
             }
         }
+        events.append(BandEvent(.dataSeen, at: time))
         return events
     }
 }

@@ -85,6 +85,45 @@ final class BandModel: ObservableObject {
         didSet { defaults.set(dialSensitivity, forKey: "dialSensitivity"); resetDial() }
     }
     @Published var error: String?
+    @Published var developerMode = false {
+        didSet {
+            defaults.set(developerMode, forKey: "developerMode")
+            if !developerMode { rawEMGEnabled = false }
+        }
+    }
+    @Published var rawEMGEnabled = false {
+        didSet {
+            guard rawEMGEnabled != oldValue else { return }
+            defaults.set(rawEMGEnabled, forKey: "rawEMGEnabled")
+            if !rawEMGEnabled { stopRawRecording() }
+            let deferringDisable = rawEMGChanging && !rawEMGEnabled
+            rawEMGError = nil
+            rawEMGChanging = live
+            do { try connection.setRawEMGEnabled(rawEMGEnabled) }
+            catch {
+                if deferringDisable {
+                    rawDisablePending = true
+                } else {
+                    rawEMGChanging = false
+                    rawEMGError = error.localizedDescription
+                }
+            }
+        }
+    }
+    @Published private(set) var rawEMGActive = false
+    @Published private(set) var rawEMGChanging = false
+    @Published private(set) var rawEMGError: String?
+    let readings = EMGReadings()
+    var rawEMGFrames: Int { readings.frames }
+    var rawEMGBytes: Int { readings.bytes }
+    @Published private(set) var rawEMGRate = 0.0
+    @Published private(set) var rawEMGSampleRate = 0.0
+    @Published private(set) var rawEMGByteRate = 0.0
+    @Published private(set) var rawRecordingURL: URL?
+    @Published private(set) var rawRecordedFrames = 0
+    /// One lowercase line in the connection surface when a subscription was
+    /// acknowledged but no data frames followed.
+    @Published private(set) var streamHint: String?
     @Published var mappings: [SwipeDirection: MacAction] = [.left: .previousDesktop, .right: .nextDesktop, .up: .missionControl, .down: .dismiss] {
         didSet {
             defaults.set(Dictionary(uniqueKeysWithValues: mappings.map { ($0.key.rawValue, $0.value.rawValue) }), forKey: "swipeMappings")
@@ -114,6 +153,7 @@ final class BandModel: ObservableObject {
     private var dialTurned = false
     private var dialEndedAt = -Double.infinity
     private var heartbeat: Double?
+    @Published private(set) var charging: Bool?
     private var started = 0.0
     private var retry: Task<Void, Never>?
     private var scanPending = false
@@ -130,8 +170,33 @@ final class BandModel: ObservableObject {
     private var metricsAt = 0.0
     private var maxDeliveryDelay = 0.0
     private var maxInputGap = 0.0
+    /// When the subscription acknowledgement arrived, waiting for the first frame.
+    private var subscribedAt: Double?
+    private var rateAt = 0.0
+    private var rateFrames = 0
+    private var rateSamples = 0
+    private var rateBytes = 0
+    private var recorder: RawEMGRecorder?
+    private var rawDisablePending = false
+    private var recordingTask: Task<Void, Never>?
+    private var recordingID = UUID()
+    private var pendingRawLines: [String] = []
+    private let rawTimestamp: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let hexNibbles = Array("0123456789abcdef".map(String.init))
 
     var bandName: String { devices.first { $0.address == selectedAddress }?.name ?? "Neural Band" }
+    enum ChargeState { case unknown, onBattery, charging, full
+        var isCharging: Bool { self == .charging }
+    }
+    var chargeState: ChargeState {
+        if charging == true { return .charging }
+        if battery == 100 { return .full }
+        return charging == false ? .onBattery : .unknown
+    }
     var canScan: Bool { !quitting && !sleeping && (!busy || wantsConnection) }
     var canChangeHand: Bool { live && handConfirmed && pendingHand == nil }
     var handSettingStatus: String {
@@ -200,6 +265,9 @@ final class BandModel: ObservableObject {
         accessibilityAllowed = controls.trusted
         hasSavedMetaSession = sessionStore.hasSavedSession()
         startsAutomatically = defaults.bool(forKey: "startsAutomatically")
+        developerMode = defaults.bool(forKey: "developerMode")
+        rawEMGEnabled = developerMode && defaults.bool(forKey: "rawEMGEnabled")
+        try? connection.setRawEMGEnabled(rawEMGEnabled)
         bandHand = BandHand(rawValue: defaults.string(forKey: "bandHand") ?? "") ?? .right
         showingSetup = !defaults.bool(forKey: "setupCompleted")
         totalGestureCount = max(0, defaults.integer(forKey: "totalGestureCount"))
@@ -278,6 +346,7 @@ final class BandModel: ObservableObject {
         devices.removeAll()
         discoveredAddresses.removeAll()
         battery = nil
+        charging = nil
         error = nil
     }
 
@@ -297,6 +366,7 @@ final class BandModel: ObservableObject {
     /// success for the band and leaves the entry where it is.
     func forgetEverything() {
         cancelEnrollment()
+        stopRawRecording()
         let address = selectedAddress
         if !address.isEmpty { forgetBand() }
         BandIdentity.delete(for: address)
@@ -455,6 +525,8 @@ final class BandModel: ObservableObject {
         live = false
         handConfirmed = false
         pendingHand = nil
+        subscribedAt = nil
+        streamHint = nil
         phase = busy ? "Disconnecting…" : "Disconnected"
         connection.stop()
     }
@@ -548,6 +620,21 @@ final class BandModel: ObservableObject {
         handConfirmed = false
         pendingHand = nil
         handSettingError = nil
+        subscribedAt = nil
+        streamHint = nil
+        charging = nil
+        readings.reset()
+        rawEMGActive = false
+        rawEMGChanging = false
+        rawDisablePending = false
+        rawEMGError = nil
+        rawEMGRate = 0
+        rawEMGSampleRate = 0
+        rawEMGByteRate = 0
+        rateAt = clock()
+        rateFrames = 0
+        rateSamples = 0
+        rateBytes = 0
         started = clock()
         router.reset()
         suspendActions()
@@ -563,6 +650,14 @@ final class BandModel: ObservableObject {
     }
 
     private func connectionEnded(_ failure: Error?, operation: BandOperation) {
+        // Readings are opt-in again after a dropped session; an unsupported
+        // combined subscription must never create a reconnect loop.
+        rawEMGEnabled = false
+        charging = nil
+        rawEMGActive = false
+        rawEMGChanging = false
+        rawDisablePending = false
+        stopRawRecording()
         // While the pair pipeline owns the flow it makes the routing
         // decisions itself; interim failures never reach the error note.
         let routing = pairRoute != .none
@@ -726,7 +821,11 @@ final class BandModel: ObservableObject {
             if discovered.isEmpty, pairRoute == .none {
                 error = "No band found. Put it in pairing mode, keep it nearby, and try again."
             }
-        case .battery(let value): battery = value
+        case .battery(let value):
+            battery = value
+        case .batteryStatus(let status):
+            if let status { battery = status.level }
+            charging = status?.charging
         case .handedness(let hand):
             guard wantsConnection, !sleeping else { return }
             bandHand = hand
@@ -751,6 +850,7 @@ final class BandModel: ObservableObject {
             pairFailedStep = nil
             bandRejectsIdentity = false
             connectRejections = 0
+            if heartbeat == nil { subscribedAt = now }
             if case .enroll = activeOperation, enrollmentStage.isRunning {
                 // Streams ready after the ceremony: the band now trusts the
                 // new key. Finishing winds the ceremony connection down and
@@ -759,8 +859,41 @@ final class BandModel: ObservableObject {
             } else if case .connect = activeOperation, pairRoute == .connecting {
                 completePairing()
             }
+            rawEMGChanging = rawEMGEnabled
             if controlsEnabled { gate.arm(at: now) }
-        case .disconnected: live = false; suspendActions()
+        case .disconnected: live = false; charging = nil; suspendActions()
+        case .rawEMGFrame(let payload):
+            guard wantsConnection, !sleeping else { return }
+            readings.receive(payload, at: now)
+            markDataArrived()
+            receivedInput()
+            recordRawFrame(payload, at: now)
+        case .rawEMGConfiguration(let configuration):
+            readings.configure(configuration)
+        case .rawEMGState(let active):
+            rawDisablePending = false
+            rawEMGActive = active
+            rawEMGChanging = false
+            rawEMGError = nil
+            // Developer mode may have been disabled while an enable was in flight.
+            if active != rawEMGEnabled {
+                do {
+                    try connection.setRawEMGEnabled(rawEMGEnabled)
+                    rawEMGChanging = true
+                } catch { rawEMGError = error.localizedDescription }
+            }
+        case .rawEMGFailure(let message):
+            rawEMGChanging = false
+            rawEMGError = message
+            if rawDisablePending {
+                rawDisablePending = false
+                do {
+                    try connection.setRawEMGEnabled(false)
+                    rawEMGChanging = true
+                } catch { rawEMGError = error.localizedDescription }
+            } else if !developerMode {
+                error = message
+            }
         case .ceremonyStage(let text):
             guard case .enroll = activeOperation, enrollmentStage.isRunning else { return }
             enrollmentStage = .working(text)
@@ -769,8 +902,11 @@ final class BandModel: ObservableObject {
             performCeremony(request)
         case .heartbeat:
             if abs(now - event.receivedAt) < 0.6 { receivedInput() }
+        case .dataSeen:
+            markDataArrived()
         case .gesture(let message):
             guard wantsConnection, !sleeping, now - message.receivedAt <= 0.35, now - message.receivedAt >= -0.1 else { return }
+            markDataArrived()
             receivedInput()
             guard pendingHand == nil else { return }
             if let label = message.gestureLabel, lastGesture != label { lastGesture = label }
@@ -832,6 +968,19 @@ final class BandModel: ObservableObject {
             dispatch(dialTarget.action(increasing: steps > 0), count: abs(steps))
         }
         maxDeliveryDelay = max(maxDeliveryDelay, now - event.receivedAt)
+        evaluateStreamHint(at: now)
+    }
+
+    /// The two hard prerequisites the captured sessions taught: wrist contact
+    /// and off the charger. Named once, ten seconds after an acknowledged
+    /// subscription has produced no sensor data. `subscribedAt` clears the
+    /// moment data frames arrive; heartbeats alone never clear it.
+    private func evaluateStreamHint(at now: Double) {
+        guard busy, let subscribedAt, now - subscribedAt >= 10 else { return }
+        if streamHint == nil {
+            connectionLog.notice("Subscription acknowledged with no data frames for \(now - subscribedAt, privacy: .public)s")
+        }
+        streamHint = "subscribed but no data — is the band on your wrist and off the charger?"
     }
 
     private func receivedInput() {
@@ -842,6 +991,74 @@ final class BandModel: ObservableObject {
         if !live { live = true }
         if phase != "Connected" { phase = "Connected" }
         if automaticStartPending && controls.trusted { toggleControls() }
+    }
+
+    /// Sensor frames are flowing, so the no-data hint no longer applies.
+    private func markDataArrived() {
+        subscribedAt = nil
+        streamHint = nil
+    }
+
+    /// One buffered jsonl line per frame. Sensor payload and timestamps only.
+    private func recordRawFrame(_ payload: Data, at time: Double) {
+        guard rawRecordingURL != nil else { return }
+        var hex = String()
+        hex.reserveCapacity(payload.count * 2)
+        for byte in payload {
+            hex += Self.hexNibbles[Int(byte >> 4)]
+            hex += Self.hexNibbles[Int(byte & 15)]
+        }
+        let line: [String: Any] = ["t": rawTimestamp.string(from: Date()), "uptime": time,
+                                   "channel": 5, "kind": "0x0200020a", "bytes": payload.count, "payload": hex]
+        if let data = try? JSONSerialization.data(withJSONObject: line), let text = String(data: data, encoding: .utf8) {
+            pendingRawLines.append(text)
+        }
+    }
+
+    /// Start capturing raw frames to a user-chosen file. Replaces any running capture.
+    func startRawRecording(to url: URL) {
+        stopRawRecording()
+        do { recorder = try RawEMGRecorder(url: url) }
+        catch {
+            self.error = "could not write to \(url.lastPathComponent): \(error.localizedDescription)"
+            return
+        }
+        recordingID = UUID()
+        rawRecordingURL = url
+        rawRecordedFrames = 0
+        connectionLog.notice("Raw emg capture started")
+    }
+
+    func stopRawRecording() {
+        flushRawRecording(closing: true)
+        recorder = nil
+        rawRecordingURL = nil
+    }
+
+    private func flushRawRecording(closing: Bool = false) {
+        guard let recorder, closing || !pendingRawLines.isEmpty else { return }
+        let lines = pendingRawLines
+        pendingRawLines.removeAll(keepingCapacity: true)
+        let previous = recordingTask
+        let id = recordingID
+        recordingTask = Task { [weak self] in
+            await previous?.value
+            do {
+                try await recorder.append(lines)
+                if let self, self.recordingID == id { self.rawRecordedFrames += lines.count }
+            } catch {
+                if let self, self.recordingID == id {
+                    self.error = "EMG recording failed: \(error.localizedDescription)"
+                    self.stopRawRecording()
+                }
+            }
+            if closing {
+                do { try await recorder.close() }
+                catch {
+                    if let self, self.recordingID == id { self.error = "Couldn't finish the EMG recording: \(error.localizedDescription)" }
+                }
+            }
+        }
     }
 
     private func scheduleReconnect() {
@@ -908,6 +1125,19 @@ final class BandModel: ObservableObject {
         let allowed = controls.trusted
         if accessibilityAllowed != allowed { accessibilityAllowed = allowed }
         if !accessibilityAllowed && controlsEnabled { pause() }
+        flushRawRecording()
+        let now = clock()
+        let elapsed = now - rateAt
+        if elapsed >= 1 {
+            rawEMGRate = Double(rawEMGFrames - rateFrames) / elapsed
+            rawEMGSampleRate = Double(readings.sampleFrames - rateSamples) / elapsed
+            rawEMGByteRate = Double(rawEMGBytes - rateBytes) / elapsed
+            rateAt = now
+            rateFrames = rawEMGFrames
+            rateSamples = readings.sampleFrames
+            rateBytes = rawEMGBytes
+        }
+        evaluateStreamHint(at: now)
         guard wantsConnection, busy, !sleeping else { return }
         let silentFor = clock() - (heartbeat ?? started)
         if silentFor > (heartbeat == nil ? 50 : 8) {
@@ -929,6 +1159,8 @@ final class BandModel: ObservableObject {
 
     func shutdown() async {
         quitting = true
+        stopRawRecording()
+        await recordingTask?.value
         disconnect()
         let deadline = ContinuousClock.now + .seconds(8)
         while busy && ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(100)) }

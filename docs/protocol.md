@@ -10,7 +10,11 @@ the protocol comes from the sibling `neural-band-poc` checkout at `e5083d8cb087f
 - `BandSession.swift` owns p-256 key agreement, the handshake, input subscription, and typed events sent to the app.
 - `PinchDial.swift` integrates relative gyro motion while a fresh index pinch is held.
 
-the input-service connection requests flags 3, 6, and 8: gestures, gyro, and quaternion. it sends the observed end-link-setup message and disables those same streams on the original subscription channel during shutdown. raw semg isn't requested. shutdown waits up to three seconds for the disable acknowledgement before closing the connection; a lost link cannot guarantee that acknowledgement.
+the input-service connection requests flags 3, 6, and 8: gestures, gyro, and quaternion. it sends the observed end-link-setup message and disables those same streams on the original subscription channel during shutdown. developer mode can add raw sEMG flag 2 to that subscription after startup, keeping the other flags enabled. shutdown also disables raw sEMG if requested, and waits up to three seconds for the disable acknowledgement before closing the connection; a lost link cannot guarantee that acknowledgement.
+
+raw sEMG configuration is read on channel `0x8007`. the readings view supports the observed 2,048 hz, eight-channel, 16-bit configuration with 16 samples per batch and encoding 0. payload type `0x0200020a` contains sequence, timestamp, and 256 sample bytes, interpreted as little-endian unsigned values interleaved by sample then channel. recordings retain the original sensor payload. the chart leaves gaps between discontinuous batches and reports the received sample rate separately from the configured rate. voltage scaling and physical electrode order remain unverified.
+
+charging is read through `BatteryInfoReq` on channel `0x8008`, every five seconds once streams are enabled. the response contains battery percentage and an optional charging flag. absent, invalid, or timed-out status stays unknown; charging is not inferred from percentage changes. the standard GATT battery characteristic is also read and subscribed to when notifications are supported.
 
 the observed airshield parameter-3 connection uses fresh p-256 keys. the handshake's empty identity query was informed by starcruiser's `Datax.swift` at commit `1bc6f9418ad85a10991817c74e15a84f85078f53`. this does not establish the band's complete owner-authentication protocol or compatibility with other firmware. keys and plaintext are not logged.
 
