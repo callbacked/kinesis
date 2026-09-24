@@ -23,13 +23,24 @@ measured on 2026-09-24 with spoken, timed holds on a right wrist:
 
 - the forearm's direction gives a compass angle and an elevation. a twist changes neither, so twisting the wrist never moves the pointer.
 - the pointer moves by how that direction changes, like a mouse. a laser mapping tied each screen spot to one arm position: the bottom of the screen meant hitting the desk, and sway moved the pointer.
-- the reach sets the scale: how many degrees of turn cross the display. the default is 75° across and 34° up and down. a right arm's "straight up" also drifts left, so the reach carries a slant that straightens it. the default slant is 0.1 compass degree per degree up.
-- acceleration: slow aiming moves the pointer at 0.6× the scale, and moves at 30°/s or faster at 1.6×. the speed comes from the gyro over 30 ms, so slowing onto a target drops the boost at once. at 2× flicks overshot.
+- speed is points per degree of turn, the same on every display, like a mouse. the default, 45, is what scored best in the practice lab on a 3440-point ultrawide: 75° crosses it, and 33° crosses a laptop screen. a scale per display made one move go 2.3 times further on the ultrawide, although a button is the same size in points on both.
+- a right arm's "straight up" drifts left, so a slant straightens it. the default is 0.1 compass degree per degree up.
+- acceleration: slow aiming moves the pointer at 0.6× the speed, and moves at 30°/s or faster at the flick boost, 1.6× by default. the arm's speed comes from the gyro over 30 ms, so slowing onto a target drops the boost at once. at 2× flicks overshot.
 - hold Option to move the arm without moving the pointer.
+
+## the levers
+
+the cursor page has three, each with one sentence on what it does:
+
+- speed, shown as the degrees of turn that cross the screen.
+- flick boost, the top acceleration.
+- steadiness, the stillness threshold. a live ring beside it shows the arm's turn rate as a dot: inside the ring, the pointer holds still.
+
+above them, the hand mirrors the forearm, so the wearer sees what the band reads. below them, "try it" lights up click, right-click, drag, and double-click as each is done.
 
 ## calibration
 
-four dots, left, right, top, and bottom. the wearer points at each and pinches. calibration measures the reach and the slant for one arm. the defaults come from practice lab runs, and calibration only fine-tunes them: on 2026-09-24 the default reach scored as well as a calibrated one. one person's calibrations also spread by about 7° across, as much as the gap between the default and a calibration.
+only in lab builds. four dots, left, right, top, and bottom: the wearer points at each and pinches, and calibration measures the speed and the slant for one arm. on 2026-09-24 the default scored as well as a calibration, and one person's calibrations spread by about 7° across, as much as the gap between the default and a calibration. the speed lever sets the feel more directly.
 
 ## holding still
 
