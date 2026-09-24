@@ -4,14 +4,15 @@
 # ships in the app.
 #
 #   scripts/pointer-lab.sh scenarios
-#   scripts/pointer-lab.sh motion.jsonl --refresh 60,100,vrr --pacing 0,0.016 --window 30-90
+#   scripts/pointer-lab.sh motion.jsonl --refresh 60,100,vrr --pacing 0,0.03 --window 30-90
+#   scripts/pointer-lab.sh scenarios --tuning 0.03:1.6,0.03:2   (acceleration seconds:top gain)
 #
 # A motion log comes from: open -n --env KINESIS_MOTION_LOG=/path/motion.jsonl dist/Kinesis.app
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if [ $# -lt 1 ]; then
-    sed -n 2,9p "$0" | sed 's/^# \{0,1\}//'
+    sed -n 2,10p "$0" | sed 's/^# \{0,1\}//'
     exit 1
 fi
 input=$1
@@ -24,6 +25,7 @@ while [ $# -gt 0 ]; do
         --pacing) export KINESIS_LAB_PACING=$2; shift 2;;
         --display) export KINESIS_LAB_DISPLAY=$2; shift 2;;
         --window) export KINESIS_LAB_WINDOW=$2; shift 2;;
+        --tuning) export KINESIS_LAB_TUNING=$2; shift 2;;
         --out) export KINESIS_LAB_OUT=$2; shift 2;;
         *) printf 'unknown option %s\n' "$1" >&2; exit 1;;
     esac

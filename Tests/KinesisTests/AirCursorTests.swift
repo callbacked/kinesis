@@ -151,7 +151,7 @@ private struct Feed {
 @Test func accelerationGivesPrecisionWhenSlowAndDistanceWhenFast() {
     #expect(PointerAcceleration.factor(speed: 0) == PointerAcceleration.slowFactor)
     #expect(PointerAcceleration.factor(speed: 1000) == PointerAcceleration.fastFactor)
-    let speeds = stride(from: 0.0, through: 60, by: 1).map(PointerAcceleration.factor(speed:))
+    let speeds = stride(from: 0.0, through: 60, by: 1).map { PointerAcceleration.factor(speed: $0) }
     #expect(zip(speeds, speeds.dropFirst()).allSatisfy { $0 <= $1 })
     // A slow move reports a low speed and a flick a high one.
     var slow = Feed(), fast = Feed()

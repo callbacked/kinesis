@@ -113,6 +113,18 @@ struct AirPointer {
     /// 0 is the most responsive and 1 the steadiest.
     var steadiness = 0.5
 
+    /// Settings the pointer lab compares. The app uses the defaults.
+    struct Tuning {
+        /// How long the speed that sets acceleration is smoothed over, in seconds. Short,
+        /// like a mouse: slowing onto a target drops the boost at once.
+        var accelerationSeconds = 0.03
+        /// The most a quick move multiplies the calibrated scale by.
+        var fastFactor = PointerAcceleration.fastFactor
+    }
+    var tuning = Tuning()
+    /// Degrees per second for acceleration, from the gyro, smoothed over `tuning.accelerationSeconds`.
+    private var accelerationSpeed = 0.0
+
     /// Below `still.lowerBound` degrees per second the arm counts as held still and
     /// the pointer does not move; above `still.upperBound` it moves fully.
     ///
@@ -200,6 +212,7 @@ struct AirPointer {
         // Body +y is the forearm, so a rate around y is a twist, which never moves the pointer.
         let rate = (corrected.x * corrected.x + corrected.z * corrected.z).squareRoot()
         speed += (rate - speed) * (1 - exp(-dt / 0.1))
+        accelerationSpeed += (rate - accelerationSpeed) * (1 - exp(-dt / tuning.accelerationSeconds))
         gateSpeed = max(speed, gateSpeed * exp(-dt / 0.15))
         recentSpeeds.append((time, speed))
         recentSpeeds.removeAll { time - $0.time > 0.2 }
@@ -234,7 +247,7 @@ struct AirPointer {
             // Scale each step by the speed at that moment, so a flick keeps its gain
             // even when the pointer is read a frame later.
             let step = SIMD2(next.azimuth - previous.azimuth, next.elevation - previous.elevation)
-            let moved = step * motion(at: time) * PointerAcceleration.factor(speed: speed)
+            let moved = step * motion(at: time) * PointerAcceleration.factor(speed: accelerationSpeed, fast: tuning.fastFactor)
             if moved != .zero { pending.append((time, moved)) }
         }
         aim = next
@@ -320,19 +333,20 @@ struct PointerPacer {
 
 /// Pointer acceleration: slow aiming moves the pointer less, for precision, and a
 /// quick flick moves it more, for distance. Slow moves once ran at 0.35 and felt
-/// numb; careful moves measured 1.2 to 1.8°/s and flicks over 30°/s.
+/// numb; careful moves measured 1.2 to 1.8°/s and flicks over 30°/s. At 2× flicks
+/// overshot: they peak at 50 to 100°/s, so all of a flick ran at the top factor.
 enum PointerAcceleration {
     static let slowSpeed = 2.0
     static let fastSpeed = 30.0
     static let slowFactor = 0.6
-    static let fastFactor = 2.0
+    static let fastFactor = 1.6
 
     /// The multiplier on the calibrated scale at this speed in degrees per second.
-    static func factor(speed: Double) -> Double {
+    static func factor(speed: Double, fast: Double = fastFactor) -> Double {
         guard speed.isFinite else { return slowFactor }
         let x = max(0, min(1, (speed - slowSpeed) / (fastSpeed - slowSpeed)))
         let eased = x * x * (3 - 2 * x)
-        return slowFactor + (fastFactor - slowFactor) * eased
+        return slowFactor + (fast - slowFactor) * eased
     }
 }
 

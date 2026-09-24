@@ -319,10 +319,12 @@ final class BandModel: ObservableObject {
          sessionStore: any MetaSessionStoring = MetaSessionStore(),
          clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
          cursorPacing: Double = PointerPacer.playbackSeconds,
-         cursorFrames: CursorFrames = .display) {
+         cursorFrames: CursorFrames = .display,
+         cursorTuning: AirPointer.Tuning = .init()) {
         self.clock = clock
         cursorPacer = PointerPacer(seconds: cursorPacing)
         self.cursorFrames = cursorFrames
+        airPointer.tuning = cursorTuning
         self.defaults = defaults
         self.started = clock()
         self.metricsAt = clock()
