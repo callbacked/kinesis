@@ -55,7 +55,15 @@ final class NativeBandConnection: NSObject, BandConnection,
     private var timer: Timer?
     private var deadline = Double.infinity
     private var lastReadAt = 0.0
+    private var lastSensorReadAt = 0.0
     private var lastStatusQuery = 0.0
+    private var trafficMetricsAt = 0.0
+    private var lastTickAt = 0.0
+    private var maxTickGap = 0.0
+    private var maxReadGap = 0.0
+    private var readBytes = 0
+    private var writtenBytes = 0
+    private var previousMotionMessages = 0
     private var stopping = false
     private var disconnecting = false
     private var failure: Error?
@@ -107,7 +115,15 @@ final class NativeBandConnection: NSObject, BandConnection,
         // startup flow, so its budget is larger than a plain connection's.
         deadline = now + (operation.isEnrollment ? 180 : 30)
         lastReadAt = now
+        lastSensorReadAt = now
         lastStatusQuery = now
+        trafficMetricsAt = now
+        lastTickAt = now
+        maxTickGap = 0
+        maxReadGap = 0
+        readBytes = 0
+        writtenBytes = 0
+        previousMotionMessages = 0
         timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -191,6 +207,9 @@ final class NativeBandConnection: NSObject, BandConnection,
 
     private func tick() {
         guard onEnd != nil else { return }
+        let time = now
+        maxTickGap = max(maxTickGap, time - lastTickAt)
+        lastTickAt = time
         if now >= deadline {
             if disconnecting { finish(); return }
             if stopping { disconnect(); return }
@@ -226,12 +245,22 @@ final class NativeBandConnection: NSObject, BandConnection,
                     try flushOutput()
                 } catch { fail(error) }
             }
-            if session.streamsEnabled, now - lastReadAt >= 2, now - lastStatusQuery >= 2 {
+            if session.streamsEnabled, now - lastSensorReadAt >= 2, now - lastStatusQuery >= 2 {
                 do {
                     outgoing.append(try session.queryStreamState())
                     lastStatusQuery = now
                     try flushOutput()
                 } catch { fail(error) }
+            }
+            if session.streamsEnabled, time - trafficMetricsAt >= 10 {
+                let motion = session.motionMessages - previousMotionMessages
+                log.info("Band traffic: \(self.readBytes, privacy: .public) bytes read, \(self.writtenBytes, privacy: .public) written, \(self.outgoing.count, privacy: .public) queued; \(motion, privacy: .public) motion samples; sensor age \(time - self.lastSensorReadAt, privacy: .public)s; read gap max \(self.maxReadGap, privacy: .public)s; timer gap max \(self.maxTickGap, privacy: .public)s")
+                trafficMetricsAt = time
+                previousMotionMessages = session.motionMessages
+                readBytes = 0
+                writtenBytes = 0
+                maxReadGap = 0
+                maxTickGap = 0
             }
         }
     }
@@ -431,10 +460,13 @@ final class NativeBandConnection: NSObject, BandConnection,
         let count = input.read(&buffer, maxLength: buffer.count)
         guard count >= 0 else { throw input.streamError ?? KinesisError(message: "Could not read band input") }
         guard count > 0 else { return }
-        lastReadAt = now
+        let time = now
+        maxReadGap = max(maxReadGap, time - lastReadAt)
+        lastReadAt = time
+        readBytes += count
         let wasEnabled = session.streamsEnabled
         let wasAuthenticated = session.authenticatedPackets > 0
-        let result = try session.feed(Data(buffer.prefix(count)), at: now)
+        let result = try session.feed(Data(buffer.prefix(count)), at: time)
         if !wasAuthenticated, session.authenticatedPackets > 0 { log.info("Native encrypted packet verified") }
         if !wasEnabled, session.streamsEnabled { log.notice("Band acknowledged gesture and motion subscription") }
         outgoing.append(result.outgoing)
@@ -442,6 +474,7 @@ final class NativeBandConnection: NSObject, BandConnection,
             log.info("Native startup read: \(count, privacy: .public) bytes, \(session.authenticatedPackets, privacy: .public) verified packets, \(result.outgoing.count, privacy: .public) reply bytes, \(self.outgoing.count, privacy: .public) queued bytes")
         }
         for event in result.events {
+            if case .dataSeen = event.payload { lastSensorReadAt = time }
             if case .connected = event.payload {
                 deadline = .infinity
                 stage = "receiving input"
@@ -462,6 +495,7 @@ final class NativeBandConnection: NSObject, BandConnection,
                 throw output.streamError ?? KinesisError(message: "Could not write to the band")
             }
             guard count > 0 else { return }
+            writtenBytes += count
             outgoing = Data(outgoing.dropFirst(count))
         }
         if queued > 0, session?.streamsEnabled != true {

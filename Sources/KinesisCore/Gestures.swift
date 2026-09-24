@@ -26,6 +26,9 @@ public struct BandEvent: Sendable {
         case gesture(BandGesture)
         case dialState(Bool)
         case dialTurn(Double)
+        case gyro(timestamp: UInt64, values: SIMD3<Double>)
+        /// Unit quaternion in captured wire order: w, x, y, z.
+        case orientation(timestamp: UInt64, values: SIMD4<Double>)
         /// A decoded sensor data frame arrived (gesture, motion, orientation, or
         /// raw emg). Tells streaming data apart from ack-only liveness.
         case dataSeen

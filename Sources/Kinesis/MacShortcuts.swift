@@ -7,14 +7,77 @@ protocol MacControls {
     var trusted: Bool { get }
     func requestAccess()
     func post(_ action: MacAction) throws
+    /// Where the pointer is now, in global display points with y growing downward.
+    var cursorLocation: CGPoint? { get }
+    /// The width of the main display in points.
+    var displayWidth: Double { get }
+    /// Moves the pointer as close to this point as a real display allows, and returns where it went.
+    func moveCursor(to point: CGPoint) throws -> CGPoint
+    func click(_ button: CGMouseButton, count: Int) throws
 }
 
 @MainActor
 struct MacShortcuts: MacControls {
+    static let shortcutEventTag: Int64 = 0x4B494E45534953
     var trusted: Bool { CGPreflightPostEventAccess() }
 
     func requestAccess() {
         _ = CGRequestPostEventAccess()
+    }
+
+    var cursorLocation: CGPoint? { CGEvent(source: nil)?.location }
+
+    var displayWidth: Double { Double(NSScreen.main?.frame.width ?? 1440) }
+
+    func moveCursor(to point: CGPoint) throws -> CGPoint {
+        guard trusted else { throw KinesisError(message: "Allow Kinesis in Accessibility to move the cursor.") }
+        guard point.x.isFinite, point.y.isFinite else { return cursorLocation ?? point }
+        let displays = NSScreen.screens.compactMap { screen -> CGRect? in
+            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+            return CGDisplayBounds(id.uint32Value)
+        }
+        let target = Self.cursorPosition(from: point, delta: .zero, displays: displays)
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                  mouseCursorPosition: target, mouseButton: .left) else {
+            throw KinesisError(message: "macOS couldn't create the cursor movement")
+        }
+        event.post(tap: .cghidEventTap)
+        return target
+    }
+
+    static func cursorPosition(from origin: CGPoint, delta: SIMD2<Double>, displays: [CGRect]) -> CGPoint {
+        let proposed = CGPoint(x: origin.x + delta.x, y: origin.y + delta.y)
+        // Clamp to a real display, including monitors above or left of the primary.
+        // Clamping only to the union would leave the cursor in gaps between screens.
+        let candidates = displays.filter { $0.width >= 1 && $0.height >= 1 }.map {
+            CGPoint(x: min(max(proposed.x, $0.minX), $0.maxX - 1),
+                    y: min(max(proposed.y, $0.minY), $0.maxY - 1))
+        }
+        return candidates.min {
+            hypot($0.x - proposed.x, $0.y - proposed.y) < hypot($1.x - proposed.x, $1.y - proposed.y)
+        } ?? origin
+    }
+
+    func click(_ button: CGMouseButton, count: Int) throws {
+        guard trusted else { throw KinesisError(message: "Allow Kinesis in Accessibility to click.") }
+        guard let location = CGEvent(source: nil)?.location else { return }
+        let events = try Self.clickEvents(button, count: count, at: location)
+        for event in events { event.post(tap: .cghidEventTap) }
+    }
+
+    static func clickEvents(_ button: CGMouseButton, count: Int, at location: CGPoint) throws -> [CGEvent] {
+        var events: [CGEvent] = []
+        for click in 1...max(1, min(count, 2)) {
+            for type: CGEventType in button == .right ? [.rightMouseDown, .rightMouseUp] : [.leftMouseDown, .leftMouseUp] {
+                guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
+                                          mouseCursorPosition: location, mouseButton: button) else {
+                    throw KinesisError(message: "macOS couldn't create the mouse click")
+                }
+                event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
+                events.append(event)
+            }
+        }
+        return events
     }
 
     static func openAccessSettings() {
@@ -67,6 +130,8 @@ struct MacShortcuts: MacControls {
         // Arrow events carry function/numeric-pad flags that macOS needs for its system shortcuts.
         down.flags.formUnion(flags)
         up.flags.formUnion(flags)
+        down.setIntegerValueField(.eventSourceUserData, value: shortcutEventTag)
+        up.setIntegerValueField(.eventSourceUserData, value: shortcutEventTag)
         return (down, up)
     }
 }

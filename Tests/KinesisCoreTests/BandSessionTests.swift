@@ -209,6 +209,17 @@ func startupIgnoresInputUntilDeviceInfoSucceeds(linkReady: Bool) throws {
     #expect(peer.session.motionMessages == 1)
 }
 
+@Test func orientationPreservesTheWireOrderAndDeviceTimestamp() throws {
+    var peer = try Peer()
+    let payload = BandWire.field(1, 1) + BandWire.field(2, 1_234_000)
+        + BandWire.field(3, Data(hex: "0000003f000000bf0000003f0000003f"))
+    let events = try peer.send(kind: 0x02000212, payload: payload, now: 101)
+    let event = try #require(events.first { if case .orientation = $0.payload { true } else { false } })
+    guard case .orientation(let timestamp, let values) = event.payload else { return }
+    #expect(timestamp == 1_234_000 && values == SIMD4(0.5, -0.5, 0.5, 0.5))
+    #expect(events.contains { if case .dataSeen = $0.payload { true } else { false } })
+}
+
 @Test func rejectedStartupChannelsFailImmediatelyWithoutReportingReady() throws {
     var peer = try Peer(completeSetup: false)
     _ = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: BandWire.field(1, 1))
@@ -394,6 +405,18 @@ private func engagement(_ events: [BandEvent]) -> [Bool] {
 }
 private func movement(_ events: [BandEvent]) -> [Double] {
     events.compactMap { if case .dialTurn(let value) = $0.payload { value } else { nil } }
+}
+
+@Test func encryptedGyroExposesAllThreeSignedAxesWithoutChangingSubscriptions() throws {
+    var peer = try Peer()
+    let payload = BandWire.field(1, 7) + BandWire.field(2, 1_234_567)
+        + BandWire.field(3, Int16(-123).littleEndianData + Int16(456).littleEndianData + Int16(-789).littleEndianData)
+    let events = try peer.send(kind: 0x0200020f, payload: payload, now: 1)
+    let event = try #require(events.first { if case .gyro = $0.payload { true } else { false } })
+    guard case .gyro(let timestamp, let values) = event.payload else { return }
+    #expect(timestamp == 1_234_567)
+    #expect(values == SIMD3(-123, 456, -789))
+    #expect(event.receivedAt == 101)
 }
 
 @Test func encryptedInputDrivesTheDialAndReleasesOnMotionLoss() throws {

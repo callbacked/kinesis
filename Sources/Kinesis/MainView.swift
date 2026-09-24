@@ -3,7 +3,7 @@ import SwiftUI
 import KinesisCore
 
 enum AppPage: String, CaseIterable, Identifiable {
-    case overview, gestures, band, readings
+    case overview, gestures, band, readings, cursor
     var id: String { rawValue }
 }
 
@@ -43,7 +43,7 @@ struct MainView: View {
             }
         }
         .onChange(of: model.developerMode) { _, enabled in
-            if !enabled, page == .readings { open(.band) }
+            if !enabled, page == .readings || page == .cursor { open(.band) }
         }
         .frame(minWidth: 920, minHeight: 660)
         .background(Field())
@@ -69,6 +69,7 @@ struct MainView: View {
                 case .gestures: GesturesPage(model: model)
                 case .band: BandPage(model: model)
                 case .readings: ReadingsPage(model: model)
+                case .cursor: CursorPage(model: model)
                 }
             // The old page leaves at once. The new one arrives part by part, from the top.
             }.id(page).transition(.asymmetric(insertion: .identity, removal: .opacity.animation(.easeOut(duration: 0.1))))
@@ -81,7 +82,7 @@ struct MainView: View {
 
     private var topBar: some View {
         HStack(spacing: 6) {
-            TextTabs(options: AppPage.allCases.filter { $0 != .readings || model.developerMode }.map { Choice($0, $0.rawValue) }, selection: $page)
+            TextTabs(options: AppPage.allCases.filter { ![.readings, .cursor].contains($0) || model.developerMode }.map { Choice($0, $0.rawValue) }, selection: $page)
             Spacer()
             AppearanceMenu(compact: true).foregroundStyle(KinesisStyle.secondary)
             Button { model.beginSetup() } label: {

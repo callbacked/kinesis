@@ -630,6 +630,7 @@ public final class BandSession {
                 }) }
                 let delta = dial.gyro(timestamp: timestamp, values: values, now: time)
                 events += engagementEvents(at: time)
+                events.append(BandEvent(.gyro(timestamp: timestamp, values: values), at: time))
                 if let delta {
                     dialPending += delta
                     if time - lastDial >= 0.02 {
@@ -645,6 +646,7 @@ public final class BandSession {
                 guard values.allSatisfy(\.isFinite), (0.9...1.1).contains(values.reduce(0) { $0 + $1 * $1 }) else {
                     throw BandProtocolError("Invalid band orientation sample")
                 }
+                events.append(BandEvent(.orientation(timestamp: timestamp, values: SIMD4(values.map(Double.init))), at: time))
             }
         }
         events.append(BandEvent(.dataSeen, at: time))

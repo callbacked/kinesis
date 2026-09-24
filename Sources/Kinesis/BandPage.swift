@@ -44,7 +44,7 @@ struct BandPage: View {
                 }.reveal(3)
             }
             OpenRow(title: "developer mode",
-                    detail: "unlocks the readings tab for live EMG and raw recording.") {
+                    detail: "unlocks readings, raw recording, and the experimental air cursor.") {
                 Toggle("Developer mode", isOn: $model.developerMode).toggleStyle(KinesisToggleStyle())
             }.reveal(4)
             Text("the connection stays on this Mac. no glasses or phone needed.")
