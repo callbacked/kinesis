@@ -451,21 +451,35 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     // On target, and still a moment, as before a shot.
     try await rig.aim(5, for: 0.3)
     let aimed = rig.pointer
-    // The pinch jerks the arm two degrees, and the band reports the pinch a moment later.
-    try await rig.sweep(to: 7, from: (5, 0), seconds: 0.08, settle: 0)
+    // The pinch nudges the arm 0.3° over 0.15 s, as measured, and the band reports it after.
+    try await rig.sweep(to: 5.3, from: (5, 0), seconds: 0.15, settle: 0)
     try await Task.sleep(for: .milliseconds(40))
     let twitched = rig.pointer
-    #expect(twitched.x < aimed.x - 5)
+    #expect(twitched.x < aimed.x - 2)
     rig.gesture(finger, "press")
     #expect(rig.controls.clicks.map { $0.0 } == [finger == "index" ? .left : .right])
     let click = try #require(rig.controls.clickPoints.last ?? nil)
     #expect(abs(click.x - aimed.x) < 3 && abs(click.y - aimed.y) < 3)
     // The pointer keeps following the arm through the pinch and its release.
     let moves = rig.controls.cursorMoves.count
-    try await rig.sweep(to: 10, from: (7, 0))
+    try await rig.sweep(to: 10, from: (5.3, 0))
     rig.gesture(finger, "release")
     try await rig.sweep(to: 12, from: (10, 0))
     #expect(rig.controls.cursorMoves.count > moves + 2 && rig.pointer.x < click.x - 50)
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func aPinchWhileMovingPressesWhereThePointerIsWithoutASnapBack() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    // Mid-sweep, the pinch arrives: the press must land where the pointer is now.
+    try await rig.sweep(to: 6, from: (0, 0), seconds: 0.4, settle: 0)
+    let here = rig.pointer
+    rig.gesture("index", "press")
+    let press = try #require(rig.controls.clickPoints.last ?? nil)
+    #expect(abs(press.x - here.x) < 1 && abs(press.y - here.y) < 1)
     await rig.model.shutdown()
 }
 

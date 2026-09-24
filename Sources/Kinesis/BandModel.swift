@@ -1215,14 +1215,16 @@ final class BandModel: ObservableObject {
               !actions.contains("buttonHold"), cursorPressedFingers.insert(message.finger).inserted else { return }
         guard controls.trusted else { pause(); return }
         // Holding still means aiming at something: absorb the drift that follows the pinch.
-        if airPointer.speed < Self.guardBelowSpeed { airPointer.guardClick(at: message.receivedAt) }
+        let aiming = airPointer.speed < Self.guardBelowSpeed
+        if aiming { airPointer.guardClick(at: message.receivedAt) }
         pinchedFinger = message.finger
         let button: CGMouseButton = message.finger == "index" ? .left : .right
         // One button at a time, like a trackpad.
         if heldButton != nil { releaseHeldButton() }
-        // The pointer never stops for a pinch, so aiming at something that moves keeps
-        // working. The press lands where the pointer was just before the pinch began.
-        let aimedAt = cursorTrail.last { $0.time <= message.receivedAt - Self.clickLookback }?.point ?? cursorTrail.first?.point
+        // Aiming at something still, the press lands where the pointer was just before
+        // the pinch nudged the arm. Moving, it lands where the pointer is: looking back
+        // then would yank the pointer to where it was 0.15 s ago.
+        let aimedAt = aiming ? cursorTrail.last { $0.time <= message.receivedAt - Self.clickLookback }?.point : nil
         let point = aimedAt ?? controls.cursorLocation
         var clicks = 1
         if let lastPress, let point, lastPress.button == button, now - lastPress.time <= Self.doubleClickTime,
