@@ -299,3 +299,14 @@ private struct Feed {
     home.rehome(axis: 0, pointer: SIMD2(22, 5), arm: SIMD2(0, 0))
     #expect(home.adjust(SIMD2(-1, 0), pointer: SIMD2(22, 5), arm: SIMD2(0, 0), strength: 0.25) == SIMD2(-1, 0))
 }
+
+@Test func aLeftWristsBandPointsItsAxisAtTheElbow() throws {
+    // Measured on a left wrist: forearm raised 40°, the band's +y points 40° down.
+    let raised = bandQuaternion(elevation: -40)
+    let left = try #require(ForearmAim(quaternion: raised, axis: ForearmAim.forearmAxis(for: .left)))
+    #expect(abs(left.elevation - 40) < 1e-9)
+    // Turning left still turns the compass angle left, as on a right wrist.
+    let turned = try #require(ForearmAim(quaternion: bandQuaternion(azimuth: 20, elevation: -40), axis: ForearmAim.forearmAxis(for: .left)))
+    #expect(abs(remainder(turned.azimuth - left.azimuth, 360) - 20) < 1e-9)
+    #expect(ForearmAim.forearmAxis(for: .right) == ForearmAim.forearmAxis)
+}

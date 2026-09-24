@@ -19,6 +19,15 @@ struct ForearmAim: Equatable {
 
     static let forearmAxis = SIMD3<Double>(0, 1, 0)
 
+    /// The band's body axis that runs from the wrist toward the hand. Measured on
+    /// 2026-09-24 with spoken holds: on a right wrist +y points at the hand (forearm up
+    /// at the ceiling +67°, hanging down −65°). On a left wrist, with the hand set to
+    /// left, +y points at the elbow (−72° and +71°), while a twist still turns around y.
+    /// Without the flip a left arm moved the pointer up and down inverted.
+    static func forearmAxis(for hand: BandHand) -> SIMD3<Double> {
+        hand == .left ? -forearmAxis : forearmAxis
+    }
+
     /// Nil for a value that is not a unit quaternion.
     init?(quaternion values: SIMD4<Double>, axis: SIMD3<Double> = forearmAxis) {
         guard (0..<4).allSatisfy({ values[$0].isFinite }),

@@ -14,7 +14,7 @@ measured on 2026-09-24 with spoken, timed holds on a right wrist:
 
 - the wire order is w, x, y, z, and the quaternion rotates the band's body frame into the world.
 - the world's +z is up. it follows gravity: turning the whole body rotated the band around world z.
-- the band's body +y runs along the forearm, toward the hand. a wrist twist rotated mostly around y.
+- the band's body +y runs along the forearm: toward the hand on a right wrist, and toward the elbow on a left wrist with the hand set to left (forearm at the ceiling −72°, hanging down +71°). a wrist twist rotates around y on both. the air cursor flips the axis for a left hand, or up and down come out inverted.
 - the compass angle around gravity is relative. the band has no magnetometer.
 
 `scripts/check-cursor-orientation.py` compares the quaternion with integrated gyro on a capture.

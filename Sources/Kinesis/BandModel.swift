@@ -1240,7 +1240,7 @@ final class BandModel: ObservableObject {
             lastDirection = nil
             dispatch(dialTarget.action(increasing: steps > 0), count: abs(steps))
         case .orientation(let timestamp, let values):
-            guard let aim = ForearmAim(quaternion: values) else { return }
+            guard let aim = ForearmAim(quaternion: values, axis: ForearmAim.forearmAxis(for: bandHand)) else { return }
             let delay = measureLinkDelay(band: timestamp, host: event.receivedAt)
             if developerMode { motion.receiveAim(aim, delay: delay, at: event.receivedAt) }
             // A late sample is where the arm was, not where it is. Skipping it pauses
