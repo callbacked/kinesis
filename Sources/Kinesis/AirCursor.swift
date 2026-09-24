@@ -119,9 +119,35 @@ struct AirPointer {
         return low...(low + 0.5)
     }
 
-    /// How much of the aim's movement reaches the pointer: 0 when held still, 1 when moving.
-    var motion: Double {
-        let x = max(0, min(1, (gateSpeed - still.lowerBound) / (still.upperBound - still.lowerBound)))
+    /// After a pinch the forearm drifts 0.2 to 0.8° over 0.3 s at 2 to 4°/s, and the
+    /// band's haptic buzz adds to it (measured 2026-09-24). Tracking something that
+    /// moves ran faster, over 6°/s. So for a moment after a pinch or a release the
+    /// stillness threshold rises to this, then fades back over 0.4 s, a little past the
+    /// drift so the smoothing can finish inside the guard: the drift is absorbed and
+    /// the pointer never freezes.
+    static let clickGuard = 3.5...6.0
+    static let clickGuardSeconds = 0.4
+    private var clickGuardUntil = -Double.infinity
+
+    /// The stillness range at this moment, raised for a while after a pinch.
+    func still(at time: Double) -> ClosedRange<Double> {
+        let base = still
+        let strength = max(0, min(1, (clickGuardUntil - time) / Self.clickGuardSeconds))
+        guard strength > 0 else { return base }
+        let low = base.lowerBound + (Self.clickGuard.lowerBound - base.lowerBound) * strength
+        let high = base.upperBound + (Self.clickGuard.upperBound - base.upperBound) * strength
+        return low...max(high, low + 0.1)
+    }
+
+    /// A pinch or release happened: absorb the drift that follows it.
+    mutating func guardClick(at time: Double) {
+        clickGuardUntil = time + Self.clickGuardSeconds
+    }
+
+    /// How much of the aim's movement reaches the pointer at this moment: 0 when held still, 1 when moving.
+    func motion(at time: Double) -> Double {
+        let range = still(at: time)
+        let x = max(0, min(1, (gateSpeed - range.lowerBound) / (range.upperBound - range.lowerBound)))
         return x * x * (3 - 2 * x)
     }
 
@@ -168,7 +194,7 @@ struct AirPointer {
             // Scale each step by the speed at that moment, so a flick keeps its gain
             // even when the pointer is read a frame later.
             let step = SIMD2(next.azimuth - previous.azimuth, next.elevation - previous.elevation)
-            pending += step * motion * PointerAcceleration.factor(speed: speed)
+            pending += step * motion(at: time) * PointerAcceleration.factor(speed: speed)
         }
         aim = next
         return true

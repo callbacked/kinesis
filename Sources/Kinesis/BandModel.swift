@@ -1191,7 +1191,7 @@ final class BandModel: ObservableObject {
               message.receivedAt >= cursorArmedAt, now - message.receivedAt <= 0.1 else { return }
         let actions = [message.action, message.derivedAction]
         if actions.contains(where: { ["release", "buttonRelease", "buttonHoldRelease"].contains($0) }) {
-            cursorPressedFingers.remove(message.finger)
+            if cursorPressedFingers.remove(message.finger) != nil { airPointer.guardClick(at: message.receivedAt) }
             if pinchedFinger == message.finger { pinchedFinger = nil }
             return
         }
@@ -1200,6 +1200,7 @@ final class BandModel: ObservableObject {
         guard actions.contains(where: { ["press", "buttonPress"].contains($0) }),
               !actions.contains("buttonHold"), cursorPressedFingers.insert(message.finger).inserted else { return }
         guard controls.trusted else { pause(); return }
+        airPointer.guardClick(at: message.receivedAt)
         pinchedFinger = message.finger
         let button: CGMouseButton = message.finger == "index" ? .left : .right
         // The pointer never stops for a pinch, so aiming at something that moves keeps

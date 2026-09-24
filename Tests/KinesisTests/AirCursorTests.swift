@@ -127,6 +127,27 @@ private struct Feed {
     #expect(slow.moved.x > 3 * PointerAcceleration.slowFactor * 0.85 && slow.moved.x < 3 * PointerAcceleration.slowFactor * 1.05)
 }
 
+@Test func theClickGuardAbsorbsThePinchDriftButLetsTrackingThrough() {
+    // The measured drift after a pinch: about 0.6° over 0.3 s, at 2 to 4°/s.
+    var drift = Feed(steadiness: 0.5)
+    drift.hold(ForearmAim(azimuth: 90, elevation: 0), seconds: 1)
+    drift.pointer.guardClick(at: drift.time)
+    drift.sweep(from: ForearmAim(azimuth: 90, elevation: 0), to: ForearmAim(azimuth: 90.6, elevation: 0), seconds: 0.25)
+    #expect(abs(drift.moved.x) < 0.05)
+    // Without the guard, the same drift reaches the pointer.
+    var unguarded = Feed(steadiness: 0.5)
+    unguarded.hold(ForearmAim(azimuth: 90, elevation: 0), seconds: 1)
+    unguarded.sweep(from: ForearmAim(azimuth: 90, elevation: 0), to: ForearmAim(azimuth: 90.6, elevation: 0), seconds: 0.25)
+    #expect(unguarded.moved.x > 0.2)
+    // Tracking at 15°/s through the same moment keeps most of its movement.
+    var tracking = Feed(steadiness: 0.5)
+    tracking.hold(ForearmAim(azimuth: 90, elevation: 0), seconds: 1)
+    tracking.pointer.guardClick(at: tracking.time)
+    tracking.sweep(from: ForearmAim(azimuth: 90, elevation: 0), to: ForearmAim(azimuth: 96, elevation: 0), seconds: 0.4)
+    let free = PointerAcceleration.factor(speed: 15) * 6
+    #expect(tracking.moved.x > free * 0.7)
+}
+
 @Test func accelerationGivesPrecisionWhenSlowAndDistanceWhenFast() {
     #expect(PointerAcceleration.factor(speed: 0) == PointerAcceleration.slowFactor)
     #expect(PointerAcceleration.factor(speed: 1000) == PointerAcceleration.fastFactor)
