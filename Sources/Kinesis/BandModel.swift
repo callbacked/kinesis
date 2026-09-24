@@ -133,6 +133,16 @@ final class BandModel: ObservableObject {
     /// How far back a click looks: the forearm starts to move as the pinch closes,
     /// before the band reports it.
     static let clickLookback = 0.15
+    /// The mouse button a pinch is holding down, so moving drags and letting go releases.
+    private var heldButton: (button: CGMouseButton, finger: String, clicks: Int)?
+    private var lastPress: (time: Double, point: CGPoint, button: CGMouseButton, clicks: Int)?
+    /// Two presses this close in time and space are a double-click, as with a trackpad.
+    static let doubleClickTime = 0.45
+    static let doubleClickDistance = 6.0
+    /// Below this aim speed a pinch counts as a click on something held still, and
+    /// the click guard absorbs the drift that follows. Moving faster, it's tracking or a
+    /// drag, and nothing is held back.
+    static let guardBelowSpeed = 3.0
     private var cursorTicker: AnyCancellable?
     /// True while the band's data reaches the Mac late: a congested or blocked radio link.
     @Published private(set) var linkCongested = false
@@ -626,7 +636,7 @@ final class BandModel: ObservableObject {
     }
 
     func setAirCursorEnabled(_ enabled: Bool) {
-        if !enabled { cancelPointerCalibration() }
+        if !enabled { cancelPointerCalibration(); releaseHeldButton() }
         guard !enabled || (canUseAirCursor && pointerCalibration == nil) else { return }
         guard enabled != airCursorEnabled else { return }
         airCursorEnabled = enabled
@@ -684,7 +694,8 @@ final class BandModel: ObservableObject {
         guard abs(delta.x) + abs(delta.y) >= 0.05 else { return }
         do {
             if cursorTrail.isEmpty { cursorTrail.append((now, location)) }
-            let posted = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y))
+            let posted = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y),
+                                                 dragging: heldButton?.button)
             cursorTrail.append((now, posted))
             cursorTrail.removeAll { now - $0.time > 0.5 }
         } catch {
@@ -1067,6 +1078,7 @@ final class BandModel: ObservableObject {
             // Gestures share one pipe with motion, so they are exactly as late as the
             // motion around them. A pinch from seconds ago must not click now.
             if linkIsLate(at: now) {
+                if heldButton?.finger == message.finger { releaseHeldButton() }
                 connectionLog.notice("Dropped a \(message.finger, privacy: .public) \(message.action, privacy: .public) that arrived \(self.linkDelay, privacy: .public)s late")
                 return
             }
@@ -1191,7 +1203,10 @@ final class BandModel: ObservableObject {
               message.receivedAt >= cursorArmedAt, now - message.receivedAt <= 0.1 else { return }
         let actions = [message.action, message.derivedAction]
         if actions.contains(where: { ["release", "buttonRelease", "buttonHoldRelease"].contains($0) }) {
-            if cursorPressedFingers.remove(message.finger) != nil { airPointer.guardClick(at: message.receivedAt) }
+            if cursorPressedFingers.remove(message.finger) != nil {
+                if airPointer.speed < Self.guardBelowSpeed { airPointer.guardClick(at: message.receivedAt) }
+                if heldButton?.finger == message.finger { releaseHeldButton() }
+            }
             if pinchedFinger == message.finger { pinchedFinger = nil }
             return
         }
@@ -1200,15 +1215,26 @@ final class BandModel: ObservableObject {
         guard actions.contains(where: { ["press", "buttonPress"].contains($0) }),
               !actions.contains("buttonHold"), cursorPressedFingers.insert(message.finger).inserted else { return }
         guard controls.trusted else { pause(); return }
-        airPointer.guardClick(at: message.receivedAt)
+        // Holding still means aiming at something: absorb the drift that follows the pinch.
+        if airPointer.speed < Self.guardBelowSpeed { airPointer.guardClick(at: message.receivedAt) }
         pinchedFinger = message.finger
         let button: CGMouseButton = message.finger == "index" ? .left : .right
+        // One button at a time, like a trackpad.
+        if heldButton != nil { releaseHeldButton() }
         // The pointer never stops for a pinch, so aiming at something that moves keeps
-        // working. The click lands where the pointer was just before the pinch began.
+        // working. The press lands where the pointer was just before the pinch began.
         let aimedAt = cursorTrail.last { $0.time <= message.receivedAt - Self.clickLookback }?.point ?? cursorTrail.first?.point
+        let point = aimedAt ?? controls.cursorLocation
+        var clicks = 1
+        if let lastPress, let point, lastPress.button == button, now - lastPress.time <= Self.doubleClickTime,
+           hypot(point.x - lastPress.point.x, point.y - lastPress.point.y) <= Self.doubleClickDistance {
+            clicks = min(3, lastPress.clicks + 1)
+        }
         do {
-            try controls.click(button, count: 1, at: aimedAt)
-            lastAction = button == .left ? "Left click" : "Right click"
+            try controls.mouseButton(button, down: true, clicks: clicks, at: point)
+            heldButton = (button, message.finger, clicks)
+            if let point { lastPress = (now, point, button, clicks) }
+            lastAction = button == .left ? (clicks > 1 ? "Double click" : "Left click") : "Right click"
             recognizedGesture = .tap(message.finger == "index" ? .indexTap : .middleTap)
             gestureCount += 1
             totalGestureCount += 1
@@ -1217,6 +1243,15 @@ final class BandModel: ObservableObject {
             self.error = error.localizedDescription
             pause()
         }
+    }
+
+    /// Lets go of a button a pinch holds. Never leaves one stuck down: this runs when
+    /// the pinch ends, when the cursor turns off, and when the link falls behind.
+    private func releaseHeldButton() {
+        guard let held = heldButton else { return }
+        heldButton = nil
+        do { try controls.mouseButton(held.button, down: false, clicks: held.clicks, at: nil) }
+        catch { self.error = error.localizedDescription }
     }
 
     /// Measures one motion sample's delay, and tracks whether the link is congested:
@@ -1231,6 +1266,7 @@ final class BandModel: ObservableObject {
             linkLateSince = since
             if !linkCongested, host - since >= 1 {
                 linkCongested = true
+                releaseHeldButton()
                 connectionLog.notice("Band data is arriving \(delay, privacy: .public)s late; the radio link is congested")
                 // Experiment: switching the motion streams off and on may clear the band's backlog.
                 if host - lastMotionRestart >= 20 {

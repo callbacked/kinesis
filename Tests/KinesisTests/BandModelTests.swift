@@ -244,17 +244,24 @@ import KinesisCore
     let displaySize = CGSize(width: 1600, height: 1000)
     private(set) var cursorMoves: [CGPoint] = []
     var cursorLocation: CGPoint? { location }
-    func moveCursor(to point: CGPoint) throws -> CGPoint {
+    private(set) var drags: [CGMouseButton] = []
+    func moveCursor(to point: CGPoint, dragging button: CGMouseButton?) throws -> CGPoint {
         if let failure { throw failure }
         cursorMoves.append(point)
+        if let button { drags.append(button) }
         location = point
         return point
     }
+    /// Presses only, as (button, click count), where each landed, and every press and release in order.
     private(set) var clickPoints: [CGPoint?] = []
-    func click(_ button: CGMouseButton, count: Int, at point: CGPoint?) throws {
+    private(set) var buttonEvents: [(button: CGMouseButton, down: Bool)] = []
+    func mouseButton(_ button: CGMouseButton, down: Bool, clicks: Int, at point: CGPoint?) throws {
         if let failure { throw failure }
-        clicks.append((button, count))
-        clickPoints.append(point)
+        buttonEvents.append((button, down))
+        if down {
+            self.clicks.append((button, clicks))
+            clickPoints.append(point)
+        }
         if let point { location = point }
     }
     private(set) var accessRequests = 0
@@ -459,6 +466,49 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     rig.gesture(finger, "release")
     try await rig.sweep(to: 12, from: (10, 0))
     #expect(rig.controls.cursorMoves.count > moves + 2 && rig.pointer.x < click.x - 50)
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func pinchMoveReleaseDragsAndTwoQuickPinchesDoubleClick() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    try await rig.aim(0)
+    model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    // Pinch, move, let go: a drag.
+    rig.gesture("index", "press")
+    try await rig.sweep(to: 8, from: (0, 0))
+    rig.gesture("index", "release")
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false])
+    #expect(!rig.controls.drags.isEmpty && rig.controls.drags.allSatisfy { $0 == .left })
+    #expect(rig.pointer.x < 700)
+    // Two quick pinches in place: the second is a double-click.
+    try await rig.aim(8, for: 0.3)
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    rig.clock.now += 0.2
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    #expect(rig.controls.clicks.suffix(2).map(\.1) == [1, 2])
+    // A button is never left down: turning the cursor off lets go of it.
+    rig.gesture("middle", "press")
+    #expect(rig.controls.buttonEvents.last?.down == true)
+    model.setAirCursorEnabled(false)
+    #expect(rig.controls.buttonEvents.last.map { $0.down == false && $0.button == .right } == true)
+    await model.shutdown()
+}
+
+@Test @MainActor func aLateReleaseStillLetsGoOfTheButton() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    rig.gesture("index", "press")
+    // The link backs up while the pinch is held; the release arrives late.
+    rig.silence(2, backlog: true)
+    try await rig.aim(0, for: 0.2)
+    rig.gesture("index", "release")
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false])
     await rig.model.shutdown()
 }
 

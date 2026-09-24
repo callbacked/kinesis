@@ -12,9 +12,11 @@ protocol MacControls {
     /// The size of the main display in points.
     var displaySize: CGSize { get }
     /// Moves the pointer as close to this point as a real display allows, and returns where it went.
-    func moveCursor(to point: CGPoint) throws -> CGPoint
-    /// Clicks at a point, or where the pointer is when the point is nil.
-    func click(_ button: CGMouseButton, count: Int, at point: CGPoint?) throws
+    /// While a button is held down the move is a drag with that button.
+    func moveCursor(to point: CGPoint, dragging button: CGMouseButton?) throws -> CGPoint
+    /// Presses or releases a mouse button at a point, or where the pointer is when the point is nil.
+    /// `clicks` is 1 for a click and 2 for the second press of a double-click.
+    func mouseButton(_ button: CGMouseButton, down: Bool, clicks: Int, at point: CGPoint?) throws
 }
 
 @MainActor
@@ -30,7 +32,7 @@ struct MacShortcuts: MacControls {
 
     var displaySize: CGSize { NSScreen.main?.frame.size ?? CGSize(width: 1440, height: 900) }
 
-    func moveCursor(to point: CGPoint) throws -> CGPoint {
+    func moveCursor(to point: CGPoint, dragging button: CGMouseButton?) throws -> CGPoint {
         guard trusted else { throw KinesisError(message: "Allow Kinesis in Accessibility to move the cursor.") }
         guard point.x.isFinite, point.y.isFinite else { return cursorLocation ?? point }
         let displays = NSScreen.screens.compactMap { screen -> CGRect? in
@@ -38,8 +40,12 @@ struct MacShortcuts: MacControls {
             return CGDisplayBounds(id.uint32Value)
         }
         let target = Self.cursorPosition(from: point, delta: .zero, displays: displays)
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                                  mouseCursorPosition: target, mouseButton: .left) else {
+        let type: CGEventType = switch button {
+        case .left?: .leftMouseDragged
+        case .right?: .rightMouseDragged
+        default: .mouseMoved
+        }
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: target, mouseButton: button ?? .left) else {
             throw KinesisError(message: "macOS couldn't create the cursor movement")
         }
         event.post(tap: .cghidEventTap)
@@ -59,27 +65,22 @@ struct MacShortcuts: MacControls {
         } ?? origin
     }
 
-    func click(_ button: CGMouseButton, count: Int, at point: CGPoint?) throws {
+    func mouseButton(_ button: CGMouseButton, down: Bool, clicks: Int, at point: CGPoint?) throws {
         guard trusted else { throw KinesisError(message: "Allow Kinesis in Accessibility to click.") }
         guard let location = point ?? CGEvent(source: nil)?.location else { return }
-        let events = try Self.clickEvents(button, count: count, at: location)
-        for event in events { event.post(tap: .cghidEventTap) }
+        try Self.buttonEvent(button, down: down, clicks: clicks, at: location).post(tap: .cghidEventTap)
     }
 
-    static func clickEvents(_ button: CGMouseButton, count: Int, at location: CGPoint) throws -> [CGEvent] {
-        var events: [CGEvent] = []
-        for click in 1...max(1, min(count, 2)) {
-            for type: CGEventType in button == .right ? [.rightMouseDown, .rightMouseUp] : [.leftMouseDown, .leftMouseUp] {
-                guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
-                                          mouseCursorPosition: location, mouseButton: button) else {
-                    throw KinesisError(message: "macOS couldn't create the mouse click")
-                }
-                event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
-                events.append(event)
-            }
+    static func buttonEvent(_ button: CGMouseButton, down: Bool, clicks: Int, at location: CGPoint) throws -> CGEvent {
+        let type: CGEventType = button == .right ? (down ? .rightMouseDown : .rightMouseUp) : (down ? .leftMouseDown : .leftMouseUp)
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: location, mouseButton: button) else {
+            throw KinesisError(message: "macOS couldn't create the mouse click")
         }
-        return events
+        event.setIntegerValueField(.mouseEventClickState, value: Int64(max(1, min(clicks, 3))))
+        return event
     }
+
+
 
     static func openAccessSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {

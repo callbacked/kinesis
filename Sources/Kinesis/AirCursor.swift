@@ -87,8 +87,11 @@ struct AirPointer {
     /// Observed scale, not a datasheet value: raw gyro counts to degrees per second.
     static let gyroScale = 0.07
 
-    private var azimuthFilter = OneEuroFilter(minimumCutoff: 3, beta: 0.05)
-    private var elevationFilter = OneEuroFilter(minimumCutoff: 3, beta: 0.05)
+    /// Honing in on a target passed hand tremor straight through at a 3 Hz floor. A
+    /// 1.2 Hz floor calms slow aiming, and the steeper speed term keeps quick moves
+    /// crisp: at 30°/s the cutoff is back near 5 Hz.
+    private var azimuthFilter = OneEuroFilter(minimumCutoff: 1.2, beta: 0.12)
+    private var elevationFilter = OneEuroFilter(minimumCutoff: 1.2, beta: 0.12)
     private var unwrappedAzimuth: Double?
     private var lastRawAzimuth = 0.0
     private var lastTime: Double?

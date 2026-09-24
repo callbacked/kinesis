@@ -201,11 +201,13 @@ private struct Feed {
             == CGPoint(x: 999, y: 799))
 }
 
-@Test @MainActor func cursorClicksReleaseTheCorrectButtonAtTheSamePosition() throws {
+@Test @MainActor func buttonEventsPressAndReleaseTheRightButtonWithTheirClickCount() throws {
+    let position = CGPoint(x: -250, y: 120)
     for button in [CGMouseButton.left, .right] {
-        let position = CGPoint(x: -250, y: 120)
-        let events = try MacShortcuts.clickEvents(button, count: 1, at: position)
-        #expect(events.map(\.type) == (button == .left ? [.leftMouseDown, .leftMouseUp] : [.rightMouseDown, .rightMouseUp]))
-        #expect(events.allSatisfy { $0.location == position && $0.getIntegerValueField(.mouseEventClickState) == 1 })
+        let down = try MacShortcuts.buttonEvent(button, down: true, clicks: 2, at: position)
+        let up = try MacShortcuts.buttonEvent(button, down: false, clicks: 2, at: position)
+        #expect(down.type == (button == .left ? .leftMouseDown : .rightMouseDown))
+        #expect(up.type == (button == .left ? .leftMouseUp : .rightMouseUp))
+        #expect(down.location == position && down.getIntegerValueField(.mouseEventClickState) == 2)
     }
 }

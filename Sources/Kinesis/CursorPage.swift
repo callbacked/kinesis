@@ -26,7 +26,7 @@ struct CursorPage: View {
                 }
             }
             Text(model.cursorRepositioning ? "pointer parked · release Option when your arm feels comfortable."
-                 : model.airCursorEnabled ? "index pinch to click. middle pinch to right-click. Escape to stop."
+                 : model.airCursorEnabled ? "pinch your index to click, or hold the pinch and move to drag. middle pinch to right-click. Escape to stop."
                  : model.canUseAirCursor ? "turn it on, then move your forearm. slow for small moves, a quick flick to cross the screen. rest your elbow if you like."
                  : "connect your band and enable Mac controls to try it.")
                 .font(KinesisType.body).foregroundStyle(KinesisStyle.secondary)
