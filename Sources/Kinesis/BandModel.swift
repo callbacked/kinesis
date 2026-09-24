@@ -113,7 +113,9 @@ final class BandModel: ObservableObject {
     }
     var canUseAirCursor: Bool { developerMode && live && controlsEnabled && handConfirmed && pendingHand == nil }
     /// How far the forearm turns to cross the screen: measured by calibration, or the standard reach.
-    @Published private(set) var pointerReach = PointerReach.standard(for: .right)
+    @Published private(set) var pointerReach = PointerReach.standard(for: .right) {
+        didSet { pointerHome.reset() }
+    }
     @Published private(set) var pointerCalibrated = false
     /// Non-nil while the three calibration targets are on screen.
     @Published private(set) var pointerCalibration: PointerCalibration? {
@@ -135,6 +137,9 @@ final class BandModel: ObservableObject {
     static let doubleClickDistance = 6.0
     private var cursorTicker: FrameTicker?
     private var cursorPacer: PointerPacer
+    private var pointerHome = PointerHome()
+    /// Where this app last put the pointer, to notice when the trackpad moves it.
+    private var cursorLastPosted: CGPoint?
     private let cursorFrames: CursorFrames
     /// True while the band's data reaches the Mac late: a congested or blocked radio link.
     @Published private(set) var linkCongested = false
@@ -645,6 +650,8 @@ final class BandModel: ObservableObject {
         cursorTicker?.stop()
         cursorTicker = nil
         cursorPacer.clear()
+        pointerHome.reset()
+        cursorLastPosted = nil
         if enabled {
             // One move per display frame. The orientation arrives at 128 Hz.
             switch cursorFrames {
@@ -668,6 +675,8 @@ final class BandModel: ObservableObject {
         let active = airCursorEnabled && repositioning
         guard active != cursorRepositioning else { return }
         cursorRepositioning = active
+        // The arm was set down somewhere new, like a lifted mouse: that is home now.
+        if !active { pointerHome.reset() }
         cursorPressedFingers.removeAll()
         pinchedFinger = nil
         // Like lifting a mouse: movement while Option is down is dropped.
@@ -711,11 +720,26 @@ final class BandModel: ObservableObject {
         }
         // Stillness and acceleration are already in the movement, sample by sample.
         let scale = pointerReach.pointsPerDegree(display: controls.displaySize, sensitivity: cursorSensitivity)
-        for step in movement { cursorPacer.add(pointerReach.screenDegrees(step.step) * scale, at: step.time) }
-        guard let location = controls.cursorLocation, let delta = cursorPacer.take(at: now) else { return }
+        guard let location = controls.cursorLocation else { return }
+        // The trackpad moved the pointer: where it is now is home.
+        if let last = cursorLastPosted, hypot(location.x - last.x, location.y - last.y) > 2 { pointerHome.reset() }
+        let pointer = SIMD2(Double(location.x), Double(location.y)) / scale
+        let arm = airPointer.aim.map { pointerReach.screenDegrees(SIMD2($0.azimuth, $0.elevation)) }
+        for step in movement {
+            var degrees = pointerReach.screenDegrees(step.step)
+            if let arm { degrees = pointerHome.adjust(degrees, pointer: pointer, arm: arm, strength: airPointer.tuning.recentering) }
+            cursorPacer.add(degrees * scale, at: step.time)
+        }
+        guard let delta = cursorPacer.take(at: now) else { return }
         do {
-            _ = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y),
-                                        dragging: heldButton?.button)
+            let target = CGPoint(x: location.x + delta.x, y: location.y + delta.y)
+            let posted = try controls.moveCursor(to: target, dragging: heldButton?.button)
+            cursorLastPosted = posted
+            if let arm {
+                let now = SIMD2(Double(posted.x), Double(posted.y)) / scale
+                if abs(posted.x - target.x) > 0.5 { pointerHome.rehome(axis: 0, pointer: now, arm: arm) }
+                if abs(posted.y - target.y) > 0.5 { pointerHome.rehome(axis: 1, pointer: now, arm: arm) }
+            }
         } catch {
             self.error = error.localizedDescription
             pause()

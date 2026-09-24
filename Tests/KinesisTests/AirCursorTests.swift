@@ -281,3 +281,21 @@ private struct Feed {
     pacer.add(SIMD2(0.01, 0), at: 1.01)
     #expect(pacer.take(at: 1.01) == nil)
 }
+
+@Test func homeNudgesMovesBackTowardWhereTheArmStarted() {
+    var home = PointerHome()
+    // The first step sets home and passes through.
+    #expect(home.adjust(SIMD2(1, 1), pointer: SIMD2(10, 5), arm: SIMD2(0, 0), strength: 0.25) == SIMD2(1, 1))
+    // At home, nothing changes.
+    #expect(home.adjust(SIMD2(2, -1), pointer: SIMD2(10, 5), arm: SIMD2(0, 0), strength: 0.25) == SIMD2(2, -1))
+    // The pointer has drifted 12° right of the arm: a move left gets more, a move right less.
+    let left = home.adjust(SIMD2(-1, 0), pointer: SIMD2(22, 5), arm: SIMD2(0, 0), strength: 0.25)
+    let right = home.adjust(SIMD2(1, 0), pointer: SIMD2(22, 5), arm: SIMD2(0, 0), strength: 0.25)
+    #expect(abs(left.x + 1.25) < 1e-9 && abs(right.x - 0.75) < 1e-9)
+    // Halfway off, half as much.
+    let halfway = home.adjust(SIMD2(-1, 0), pointer: SIMD2(16, 5), arm: SIMD2(0, 0), strength: 0.25)
+    #expect(abs(halfway.x + 1.125) < 1e-9)
+    // Held at a screen edge, where the arm is becomes home on that axis.
+    home.rehome(axis: 0, pointer: SIMD2(22, 5), arm: SIMD2(0, 0))
+    #expect(home.adjust(SIMD2(-1, 0), pointer: SIMD2(22, 5), arm: SIMD2(0, 0), strength: 0.25) == SIMD2(-1, 0))
+}

@@ -177,6 +177,8 @@ struct PracticeRandom {
         var steadiness: Double
         var hand: String
         var reach: PointerReach
+        /// False when the run used the default reach, which is what the defaults are tuned on.
+        var calibrated: Bool
         var display: CGSize
         var refreshRate: Int
     }
@@ -399,7 +401,7 @@ struct PracticeRandom {
             medianError: median(trials.compactMap(\.error)),
             medianStraightness: median(trials.filter { $0.hit && $0.pathLength > 0 }.map { min(1, $0.distance / $0.pathLength) }),
             sensitivity: model.cursorSensitivity, steadiness: model.cursorSteadiness, hand: "\(model.bandHand)",
-            reach: model.pointerReach, display: bounds,
+            reach: model.pointerReach, calibrated: model.pointerCalibrated, display: bounds,
             refreshRate: NSScreen.main?.maximumFramesPerSecond ?? 0)
         self.summary = summary
         if let folder {

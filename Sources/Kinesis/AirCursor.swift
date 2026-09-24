@@ -120,6 +120,8 @@ struct AirPointer {
         var accelerationSeconds = 0.03
         /// The most a quick move multiplies the calibrated scale by.
         var fastFactor = PointerAcceleration.fastFactor
+        /// How strongly moves are nudged back toward the arm's home: see `PointerHome`.
+        var recentering = PointerHome.strength
     }
     var tuning = Tuning()
     /// Degrees per second for acceleration, from the gyro, smoothed over `tuning.accelerationSeconds`.
@@ -328,6 +330,52 @@ struct PointerPacer {
 
     mutating func clear() {
         steps = []
+    }
+}
+
+/// Keeps the pointer and the arm from drifting apart. With acceleration, a move's
+/// gain depends on its speed, and an arm doesn't move at the same speed both ways:
+/// on 2026-09-24 a right arm flicked right at over 30°/s and came back left at 3 to
+/// 30°/s, so each round trip left the pointer further right, and over 40 seconds of
+/// practice the arm had walked 25° left and 5° up to keep up. A mouse is lifted and
+/// set down again. An arm can't be. So the arm's direction when the cursor turned
+/// on is home: while the arm moves, a move back toward home gets up to `strength`
+/// more gain and a move away that much less, most when far from home. The pointer
+/// never moves on its own, so the correction is hard to notice. Pushing the pointer
+/// against a screen edge sets home again on that axis, as a mouse user would: the
+/// same run raised the arm 27° at the start while the pointer sat at the top edge.
+struct PointerHome {
+    static let strength = 0.25
+    /// How far off, in degrees, gets the full correction.
+    static let fullDegrees = 12.0
+    /// The pointer's position less the arm's direction, both in screen degrees, at home.
+    private var home: SIMD2<Double>?
+
+    mutating func reset() {
+        home = nil
+    }
+
+    /// The pointer is held at a screen edge on this axis: where the arm is now is home.
+    mutating func rehome(axis: Int, pointer: SIMD2<Double>, arm: SIMD2<Double>) {
+        home?[axis] = pointer[axis] - arm[axis]
+    }
+
+    /// Adjusts one step. `pointer` and `arm` are in screen degrees: the pointer's
+    /// position over the points per degree, and the arm's direction through the reach.
+    mutating func adjust(_ step: SIMD2<Double>, pointer: SIMD2<Double>, arm: SIMD2<Double>, strength: Double) -> SIMD2<Double> {
+        let offset = pointer - arm
+        guard let home else {
+            self.home = offset
+            return step
+        }
+        let off = offset - home
+        var adjusted = step
+        for axis in 0..<2 where step[axis] != 0 && off[axis] != 0 {
+            let amount = strength * min(1, abs(off[axis]) / Self.fullDegrees)
+            // A step against the offset brings the pointer back toward home.
+            adjusted[axis] *= step[axis] * off[axis] < 0 ? 1 + amount : 1 - amount
+        }
+        return adjusted
     }
 }
 

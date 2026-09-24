@@ -15,8 +15,11 @@ import Testing
 //   KINESIS_LAB_PACING   playback delays in seconds to compare, 0 for none (default: the app's)
 //   KINESIS_LAB_DISPLAY  display size in points (default: 3440x1440)
 //   KINESIS_LAB_WINDOW   seconds of the log to replay, as "from-to" (default: all)
-//   KINESIS_LAB_TUNING   pointer tunings to compare, as "accelerationSeconds:fastFactor"
-//                        separated by commas, like "0.1:2,0.03:2,0.03:1.6" (default: the app's)
+//   KINESIS_LAB_TUNING   pointer tunings to compare, as "accelerationSeconds:fastFactor:recentering"
+//                        separated by commas, like "0.03:1.6:0,0.03:1.6:0.3" (default: the app's)
+//
+// A motion log from a practice lab run has a summary.json beside it. The lab then
+// uses that run's reach, display, sensitivity, and steadiness.
 
 private let environment = ProcessInfo.processInfo.environment
 
@@ -36,10 +39,19 @@ private let environment = ProcessInfo.processInfo.environment
             var tuning = AirPointer.Tuning()
             if parts.count > 0 { tuning.accelerationSeconds = parts[0] }
             if parts.count > 1 { tuning.fastFactor = parts[1] }
+            if parts.count > 2 { tuning.recentering = parts[2] }
             return (String(item), tuning)
         }
     } ?? [("app", AirPointer.Tuning())]
 
+    var settings = LabSettings(display: display)
+    if input != "scenarios" {
+        let summary = URL(fileURLWithPath: input).deletingLastPathComponent().appendingPathComponent("summary.json")
+        if let data = try? Data(contentsOf: summary), let run = try? JSONDecoder().decode(LabSettings.self, from: data) {
+            settings = run
+            print("using the run's settings: \(Int(run.display.width))x\(Int(run.display.height)), reach \(Int(run.reach?.degreesAcrossWidth ?? 0))° across, sensitivity \(run.sensitivity ?? 1)")
+        }
+    }
     let recordings: [(name: String, events: [LabEvent])] = input == "scenarios"
         ? LabScenario.all.map { ($0.name, $0.events()) }
         : [(URL(fileURLWithPath: input).deletingPathExtension().lastPathComponent, try LabEvent.load(input, window: window))]
@@ -49,11 +61,13 @@ private let environment = ProcessInfo.processInfo.environment
     for recording in recordings {
         for tuning in tunings {
         for refresh in refreshes {
-            let baseline = LabRun(events: recording.events, refresh: refresh, pacing: 0, display: display, tuning: tuning.tuning).replay()
+            let baseline = LabRun(events: recording.events, refresh: refresh, pacing: 0, settings: settings, tuning: tuning.tuning).replay()
             for pacing in pacings {
-                let report = pacing == 0 ? baseline : LabRun(events: recording.events, refresh: refresh, pacing: pacing, display: display, tuning: tuning.tuning).replay()
+                let report = pacing == 0 ? baseline : LabRun(events: recording.events, refresh: refresh, pacing: pacing, settings: settings, tuning: tuning.tuning).replay()
                 let name = "\(recording.name)-\(refresh)hz-\(Int(pacing * 1000))ms" + (tunings.count > 1 ? "-\(tuning.name)" : "")
                 try report.frameTable.write(to: out.appendingPathComponent("\(name).frames.csv"), atomically: true, encoding: .utf8)
+                try ("across,down\n" + report.drift.map { String(format: "%.2f,%.2f", $0.x, $0.y) }.joined(separator: "\n"))
+                    .write(to: out.appendingPathComponent("\(name).drift.csv"), atomically: true, encoding: .utf8)
                 try report.pressTable.write(to: out.appendingPathComponent("\(name).presses.csv"), atomically: true, encoding: .utf8)
                 let line = report.line(recording: tunings.count > 1 ? "\(recording.name) \(tuning.name)" : recording.name,
                                        refresh: refresh, pacing: pacing, lag: report.lag(behind: baseline))
@@ -66,6 +80,18 @@ private let environment = ProcessInfo.processInfo.environment
     try ([LabReport.header] + summary).joined(separator: "\n").appending("\n")
         .write(to: out.appendingPathComponent("summary.txt"), atomically: true, encoding: .utf8)
     print("wrote \(out.path)")
+}
+
+/// The cursor settings a replay uses: a lab run's, or the defaults.
+struct LabSettings: Decodable {
+    var display: CGSize
+    var reach: PointerReach?
+    var sensitivity: Double?
+    var steadiness: Double?
+
+    init(display: CGSize) {
+        self.display = display
+    }
 }
 
 /// One event as the band sent it and the Mac received it.
@@ -236,16 +262,17 @@ struct LabRun {
     var events: [LabEvent]
     var refresh: String
     var pacing: Double
-    var display: CGSize
+    var settings: LabSettings
     var tuning = AirPointer.Tuning()
 
     @MainActor func replay() -> LabReport {
         let clock = LabClock()
         clock.now = events.first?.at ?? 0
-        let controls = LabControls(display: display) { clock.now }
+        let controls = LabControls(display: settings.display) { clock.now }
         let connection = RecordedConnection()
         let defaults = MemoryDefaults()
         defaults.set(true, forKey: "setupCompleted")
+        if let reach = settings.reach { defaults.set(try? JSONEncoder().encode(reach), forKey: "pointerReach.lab-band.right") }
         let model = BandModel(defaults: defaults, connection: connection, controls: controls, sessionStore: SavedSessionStore(),
                               clock: { clock.now }, cursorPacing: pacing, cursorFrames: .manual, cursorTuning: tuning)
         model.selectedAddress = "lab-band"
@@ -255,6 +282,10 @@ struct LabRun {
         connection.send(.heartbeat, at: clock.now)
         connection.send(.handedness(.right), at: clock.now)
         model.toggleControls()
+        if let sensitivity = settings.sensitivity { model.cursorSensitivity = sensitivity }
+        if let steadiness = settings.steadiness { model.cursorSteadiness = steadiness }
+        let reach = model.pointerReach
+        let scale = reach.pointsPerDegree(display: settings.display, sensitivity: model.cursorSensitivity)
 
         var random = SplitMix(seed: 11)
         func frameLength() -> Double {
@@ -267,6 +298,7 @@ struct LabRun {
         var speeds: [(time: Double, speed: Double)] = []
         var rates: [(time: Double, rate: Double)] = []
         var aims: [(time: Double, azimuth: Double)] = []
+        var drift: [SIMD2<Double>] = []
         var approaches: [AirPointer.Approach] = []
         var sequence: UInt64 = 0
         for event in events {
@@ -293,7 +325,13 @@ struct LabRun {
                 connection.send(.orientation(timestamp: event.stamp, values: q), at: event.at)
                 if let aim = ForearmAim(quaternion: q) {
                     let previous = aims.last?.azimuth ?? aim.azimuth
-                    aims.append((event.at, previous + remainder(aim.azimuth - previous, 360)))
+                    let azimuth = previous + remainder(aim.azimuth - previous, 360)
+                    aims.append((event.at, azimuth))
+                    // How far the pointer and the arm have drifted apart, in screen degrees.
+                    if model.airCursorEnabled, aims.count % 16 == 0 {
+                        let pointer = SIMD2(Double(controls.location.x), Double(controls.location.y)) / scale
+                        drift.append(pointer - reach.screenDegrees(SIMD2(azimuth, aim.elevation)))
+                    }
                 }
             case .gesture(let finger, let action, let derived):
                 if action == "press" { approaches.append(model.airPointer.approach) }
@@ -303,7 +341,7 @@ struct LabRun {
             }
         }
         return LabReport(frames: controls.frames, offFrameMoves: controls.offFrameMoves, presses: controls.presses,
-                         releases: controls.releases, speeds: speeds, aims: aims, approaches: approaches, rates: rates)
+                         releases: controls.releases, speeds: speeds, aims: aims, approaches: approaches, rates: rates, drift: drift)
     }
 }
 
@@ -318,6 +356,17 @@ struct LabReport {
     var approaches: [AirPointer.Approach]
     /// The arm's turn rate from each gyro sample, unsmoothed, in degrees a second.
     var rates: [(time: Double, rate: Double)]
+    /// The pointer less the arm, in screen degrees, 8 times a second.
+    var drift: [SIMD2<Double>]
+
+    /// How far the pointer and the arm wandered apart: the span of the middle 90 %,
+    /// across and up and down, after the first 5 seconds, when the arm settles into a pose.
+    var driftSpan: SIMD2<Double>? {
+        guard drift.count > 50 else { return nil }
+        let across = drift.dropFirst(40).map(\.x)
+        let down = drift.dropFirst(40).map(\.y)
+        return SIMD2(percentile(across, 0.95) - percentile(across, 0.05), percentile(down, 0.95) - percentile(down, 0.05))
+    }
 
     /// For each flick (a move that peaks above 40°/s): the share of the pointer's travel
     /// that comes after the arm has stopped. The eye stops the arm on the target, so
@@ -371,7 +420,7 @@ struct LabReport {
     }
 
     /// The lag is against the same refresh rate with no playback delay.
-    static let header = "recording        refresh pacing  moving  uneven p50/p90  stalls  +lag   presses  jump p50/p90/max pt  after p50/p90/max pt  flicks tail p50/p90  pt/° p50"
+    static let header = "recording              refresh pacing  moving  uneven p50/p90  stalls  +lag   presses  jump p50/p90/max pt  after p50/p90/max pt  flicks tail p50/p90  pt/° p50  drift °"
 
     /// How much later this run's pointer moves than another run's of the same input,
     /// in milliseconds: the delay that best lines up the two paths.
@@ -450,12 +499,13 @@ struct LabReport {
         func triple(_ xs: [Double]) -> String {
             xs.isEmpty ? "-" : String(format: "%.1f/%.1f/%.1f", percentile(xs, 0.5), percentile(xs, 0.9), xs.max()!)
         }
-        return recording.padding(toLength: 16, withPad: " ", startingAt: 0) + " "
+        return recording.padding(toLength: 22, withPad: " ", startingAt: 0) + " "
             + String(format: "%-7@ %4.0fms  %6d  %5.2f/%5.2f  %5.1f%%  %4@  %7d  ", refresh as NSString, pacing * 1000, u.moving, u.p50, u.p90, u.stalls * 100,
                      (lag.map { String(format: "%.0fms", $0) } ?? "-") as NSString, stats.count)
             + triple(jumps).padding(toLength: 21, withPad: " ", startingAt: 0) + triple(after).padding(toLength: 22, withPad: " ", startingAt: 0)
             + (tails.isEmpty ? "0" : String(format: "%d  %.0f%%/%.0f%%", tails.count, percentile(tails, 0.5) * 100, percentile(tails, 0.9) * 100))
-            + (gains.isEmpty ? "" : String(format: "  %.0f", percentile(gains, 0.5)))
+            + (gains.isEmpty ? "     " : String(format: "  %3.0f", percentile(gains, 0.5)))
+            + (driftSpan.map { String(format: "      %.0f×%.0f", $0.x, $0.y) } ?? "")
     }
 
     var frameTable: String {
