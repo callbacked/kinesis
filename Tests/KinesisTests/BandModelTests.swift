@@ -648,6 +648,15 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     #expect(rig.controls.cursorMoves.isEmpty && rig.controls.clicks.isEmpty)
     #expect(model.linkCongested)
     #expect(rig.connection.motionRestarts == 1)
+    // While it stays late, the restart is tried again every 20 s, not more often.
+    // The link itself stays up: status replies and sensor frames keep coming, only late.
+    for second in 1...21 {
+        rig.connection.send(.heartbeat, at: rig.clock.now)
+        rig.connection.send(.dataSeen, at: rig.clock.now)
+        try await rig.aim(10, for: 1)
+        if second == 10 { #expect(rig.connection.motionRestarts == 1) }
+    }
+    #expect(rig.connection.motionRestarts == 2)
     // Without the cursor, a late swipe sends no shortcut either.
     model.setAirCursorEnabled(false)
     rig.gesture("thumb", "left")
@@ -1958,4 +1967,15 @@ private struct FakePairClient: BandPairClient {
     #expect(model.cursorSpeed == PointerReach.standardSpeed && model.cursorFlickBoost == PointerAcceleration.fastFactor)
     #expect(model.cursorSteadiness == BandModel.standardSteadiness && model.airPointer.tuning.fastFactor == PointerAcceleration.fastFactor)
     #expect(defaults.data(forKey: "pointerReach..right") != nil)
+}
+
+@Test @MainActor func theFirstStreamRequestAsksOnlyForWhatIsUsed() {
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: MemoryDefaults(), connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
+    // Before any connection: gyro for the dial, and no orientation until something shows or uses it.
+    #expect(connection.motionRequests == [MotionStreams(gyro: true, orientation: false)])
+    // Moving the steadiness lever touches neither the streams nor the reach.
+    let reach = model.pointerReach
+    model.cursorSteadiness = 0.9
+    #expect(connection.motionRequests.count == 1 && model.pointerReach == reach)
 }

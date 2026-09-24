@@ -189,7 +189,9 @@ public final class BandSession {
         // An unanswered stream change is given up after 8 s, so a later one can go out.
         if let pending = motionRequest, time - pending.sentAt >= 8, !stopping {
             motionRequest = nil
-            if motionAfterRestart != nil { motionAfterRestart = nil; wantedMotion = nil }
+            // A restart gives up only when its own off request fails. An earlier change
+            // failing leaves the restart waiting to go out.
+            if motionAfterRestart != nil, pending.wanted == .none { motionAfterRestart = nil; wantedMotion = nil }
             events.append(BandEvent(.motionStreams(motion, confirmedAfter: time - pending.sentAt, accepted: false), at: time))
         }
         if let handRequest, time >= handRequest.deadline, !stopping {
@@ -208,7 +210,7 @@ public final class BandSession {
         return events
     }
 
-    /// Update the existing input subscription. Gesture and motion flags stay on.
+    /// Update the existing input subscription. Gestures stay on, and motion stays as it is.
     public func setRawEMGEnabled(_ enabled: Bool, at time: Double) throws -> Data {
         guard !stopping else { throw BandProtocolError("Wait for the band to reconnect before changing readings.") }
         guard rawRequest == nil else { throw BandProtocolError("Wait for the current EMG change to finish.") }
@@ -229,7 +231,8 @@ public final class BandSession {
     private func rawStreamUpdate(id: UInt64, enabled: Bool) throws -> Data {
         rawRequested = true
         return try encrypt(BandWire.frame(channel: streamChannel, words: [],
-            payload: BandWire.field(1, id) + BandWire.field(4, streamControl(motion, raw: enabled))))
+            // A motion change in flight is where motion is going: this frame must not undo it.
+            payload: BandWire.field(1, id) + BandWire.field(4, streamControl(motionRequest?.wanted ?? motion, raw: enabled))))
     }
 
     /// Every stream field, on or off explicitly, so no field is left to the band's default.
@@ -348,6 +351,9 @@ public final class BandSession {
         handRequest = nil
         rawRequest = nil
         batteryRequest = nil
+        motionRequest = nil
+        wantedMotion = nil
+        motionAfterRestart = nil
         guard transmitter != nil, setupStage == .input else { return Data() }
         return try streamRequest(id: 4, enabled: false)
     }
@@ -625,8 +631,13 @@ public final class BandSession {
                 motionRequest = nil
                 guard !stopping else { return [] }
                 guard try fields.integer(2) == 1, fields.contains(5) else {
-                    wantedMotion = nil
-                    motionAfterRestart = nil
+                    if motionAfterRestart != nil, pending.wanted != .none {
+                        // An earlier change was refused. The restart still goes out, then restores what is on now.
+                        motionAfterRestart = motion
+                    } else {
+                        wantedMotion = nil
+                        motionAfterRestart = nil
+                    }
                     return [BandEvent(.motionStreams(motion, confirmedAfter: time - pending.sentAt, accepted: false), at: time)]
                 }
                 let flags = try ProtoFields(fields.bytes(5))

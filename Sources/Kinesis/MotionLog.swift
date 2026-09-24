@@ -43,6 +43,7 @@ import KinesisCore
         }
         guard var data = try? JSONSerialization.data(withJSONObject: row) else { return }
         data.append(0x0a)
-        handle.write(data)
+        // A full disk or a removed volume ends the log, never the app.
+        do { try handle.write(contentsOf: data) } catch { stop() }
     }
 }

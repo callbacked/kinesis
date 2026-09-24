@@ -170,9 +170,11 @@ final class NativeBandConnection: NSObject, BandConnection,
 
     func restartMotionStreams() {
         guard let session, !stopping, !disconnecting else { return }
-        log.notice("Restarting the motion streams to clear a backlog")
         do {
-            outgoing.append(try session.restartMotionStreams(at: now))
+            let request = try session.restartMotionStreams(at: now)
+            guard !request.isEmpty else { return }
+            log.notice("Restarting the motion streams to clear a backlog")
+            outgoing.append(request)
             try flushOutput()
         } catch { fail(error) }
     }

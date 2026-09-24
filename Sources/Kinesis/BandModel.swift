@@ -130,8 +130,6 @@ final class BandModel: ObservableObject {
         didSet {
             defaults.set(cursorSteadiness, forKey: "pointerStillness")
             airPointer.steadiness = cursorSteadiness
-        loadPointerReach()
-        updateMotionStreams()
         }
     }
     var canUseAirCursor: Bool { developerMode && live && controlsEnabled && handConfirmed && pendingHand == nil }
@@ -410,6 +408,9 @@ final class BandModel: ObservableObject {
         let sensitivity = defaults.double(forKey: "dialSensitivity")
         if (0.5...4).contains(sensitivity) { dialSensitivity = sensitivity }
         refreshIdentity()
+        // Observers don't run during init, so apply what they would have.
+        loadPointerReach()
+        updateMotionStreams()
         ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect().sink { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -1364,11 +1365,14 @@ final class BandModel: ObservableObject {
             linkOnTimeSince = nil
             let since = linkLateSince ?? host
             linkLateSince = since
-            if !linkCongested, host - since >= 1 {
-                linkCongested = true
-                releaseHeldButton()
-                connectionLog.notice("Band data is arriving \(delay, privacy: .public)s late; the radio link is congested")
-                // Experiment: switching the motion streams off and on may clear the band's backlog.
+            if host - since >= 1 {
+                if !linkCongested {
+                    linkCongested = true
+                    releaseHeldButton()
+                    connectionLog.notice("Band data is arriving \(delay, privacy: .public)s late; the radio link is congested")
+                }
+                // Turning the motion streams off and on may clear the band's backlog. It has
+                // not yet been seen to help, so it is cheap: once every 20 s while data is late.
                 if host - lastMotionRestart >= 20 {
                     lastMotionRestart = host
                     connection.restartMotionStreams()

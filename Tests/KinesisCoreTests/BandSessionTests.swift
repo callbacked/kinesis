@@ -856,3 +856,21 @@ private func motionConfirmations(_ events: [BandEvent]) -> [(MotionStreams, Bool
     let stop = try streamAsk(try #require(peer.requests(peer.session.stop()).first))
     #expect(stop.id == 4 && stop.gesture == 0 && stop.gyro == 0 && stop.orientation == 0)
 }
+
+@Test func aRestartQueuedBehindAnUnansweredChangeStillGoesOut() throws {
+    var peer = try Peer()
+    _ = try streamReply(&peer, id: 3, gyro: true, orientation: true, now: 1)
+    // A change goes out and is never answered. A restart asked for meanwhile waits.
+    let first = try peer.requests(peer.session.setMotionStreams(MotionStreams(gyro: true, orientation: false), at: 100))
+    #expect(first.count == 1)
+    #expect(try peer.session.restartMotionStreams(at: 101).isEmpty)
+    // The unanswered change is given up. The restart must not be given up with it.
+    #expect(motionConfirmations(peer.session.tick(at: 108.5)).map(\.1) == [false])
+    let off = try peer.requests(peer.session.flushMotion(at: 109))
+    let offAsk = try streamAsk(try #require(off.first))
+    #expect(offAsk.gyro == 0 && offAsk.orientation == 0)
+    // Once off, it comes back on as the unanswered change asked: gyro without orientation.
+    let quiet = try streamReply(&peer, id: offAsk.id, gyro: false, orientation: false, now: 110)
+    let onAsk = try streamAsk(try #require(quiet.requests.first))
+    #expect(onAsk.gyro == 1 && onAsk.orientation == 0)
+}
