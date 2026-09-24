@@ -1,6 +1,6 @@
 # air cursor
 
-the air cursor is a laser pointer from your forearm. it uses the band's orientation quaternion (stream flag 8), not the gyro.
+the air cursor moves the mac pointer with your forearm, like a mouse. an index pinch clicks and a middle pinch right-clicks. hold the pinch and move to drag. it uses the band's orientation quaternion (stream flag 8) for where the forearm points, and the gyro (flag 6) for how fast it moves.
 
 ## what the quaternion means
 
@@ -17,23 +17,50 @@ measured on 2026-09-24 with spoken, timed holds on a right wrist:
 - the band's body +y runs along the forearm, toward the hand. a wrist twist rotated mostly around y.
 - the compass angle around gravity is relative. the band has no magnetometer.
 
-an earlier comparison on the september 14 captures matched the same order and frame against integrated gyro within about 3 %. `scripts/check-cursor-orientation.py` reproduces it on a capture.
+`scripts/check-cursor-orientation.py` compares the quaternion with integrated gyro on a capture.
 
 ## the pointer
 
-- forearm direction in the world gives a compass angle and an elevation. a twist changes neither, so twisting the wrist never moves the pointer.
-- turning it on anchors it: the aim at that moment points at the pointer. after that, 40° of forearm turn crosses the main display at sensitivity 1, and the same aim always gives the same point, also after the pointer stopped at a screen edge.
-- a move by the trackpad, a pinch, Option, or a gap in the stream re-anchors at the pointer's position instead of jumping.
-- near straight up or down (beyond 75°) the compass angle is undefined, so it holds still there.
+- the forearm's direction gives a compass angle and an elevation. a twist changes neither, so twisting the wrist never moves the pointer.
+- the pointer moves by how that direction changes, like a mouse. a laser mapping tied each screen spot to one arm position: the bottom of the screen meant hitting the desk, and sway moved the pointer.
+- the reach sets the scale: how many degrees of turn cross the display. the default is 75° across and 34° up and down. a right arm's "straight up" also drifts left, so the reach carries a slant that straightens it. the default slant is 0.1 compass degree per degree up.
+- acceleration: slow aiming moves the pointer at 0.6× the scale, and moves at 30°/s or faster at 1.6×. the speed comes from the gyro over 30 ms, so slowing onto a target drops the boost at once. at 2× flicks overshot.
+- hold Option to move the arm without moving the pointer.
 
-## steadiness
+## calibration
 
-a held arm sways by about 0.2° typically and up to 1°, and 87 % of that sway is between 1 and 3 Hz. a low-pass filter can't remove sway that slow without lag. so a light 1€ filter takes the tremor, and a dead zone takes the sway: the pointer stays still until the aim leaves a circle of 0.1° to 1° (the steadiness setting), then follows it on a rope. above 30°/s the circle shrinks to nothing, so a quick move lands where the arm points. a slow move can stop up to one circle short.
+four dots, left, right, top, and bottom. the wearer points at each and pinches. calibration measures the reach and the slant for one arm. the defaults come from practice lab runs, and calibration only fine-tunes them: on 2026-09-24 the default reach scored as well as a calibrated one. one person's calibrations also spread by about 7° across, as much as the gap between the default and a calibration.
+
+## holding still
+
+a held arm sways by about 0.2° typically and up to 1°, mostly between 1 and 3 Hz. with the gyro smoothed over 100 ms, holding still ran 0.5°/s typically and 0.9°/s at the 90th percentile, and slow, careful moves ran 1.2 to 1.8°/s. so the pointer stays still below about 0.85°/s and moves fully above about 1.35°/s, at the middle steadiness setting. a positional dead zone gave slow moves backlash, like an arm that was asleep. a light 1€ filter takes the tremor.
+
+## clicks
+
+- a click lands where the pointer is. an earlier version pressed where the pointer was 0.15 s before, to undo the pinch's nudge, and the pointer visibly jumped back.
+- after a pinch the forearm drifts 0.2° to 0.8° over 0.3 s, and the haptic buzz adds to it. when the arm was still or slowing onto a target at the pinch, a click guard absorbs that drift for 0.4 s. the guard starts at the arm's speed at the pinch, so slowing on moves nothing and speeding up again, as for a drag, gets through.
+- when the arm tracks something that moves, nothing is held back.
+- two presses within 0.45 s and 6 points are a double-click.
+- a pinch moves the forearm about 150 ms before the band reports it. a moving target travels 40 to 60 points in that time at 280 to 400 points a second, so fast moving targets are hit about 60 % of the time.
+
+## drift and home
+
+with acceleration, a move's gain depends on its speed, and an arm doesn't move at the same speed both ways. a right arm flicked right at over 30°/s and came back left more slowly, so over 40 seconds the arm walked 25° left to keep up. a mouse is lifted and set down again. an arm can't be. so the arm's direction when the cursor turns on is home. while the arm moves, a move back toward home gets up to 25 % more gain and a move away that much less. the pointer never moves on its own. pushing the pointer against a screen edge, releasing Option, or moving the pointer with the trackpad sets home again.
+
+## smooth movement
+
+- the pointer moves on every frame of the display under it, at that display's top rate.
+- the band's samples arrive two at a time, every 15 ms and sometimes after 30 ms. posting whatever arrived each frame left 40 % of frames still at 100 Hz. each sample is placed at the time the band's clock gives it, and the movement plays back 30 ms behind the arm, part of a sample when a frame falls between two. that leaves 5 to 8 % of frames still, and adds about 10 ms.
 
 ## late data
 
-on a congested radio link the band's samples reached the mac up to 12 s late, in bursts, while the link stayed up (macOS drops it after 4 s of radio silence). host arrival time can't see that. `ArrivalDelay` compares the band's timestamps with the mac's clock, and input more than 0.3 s late is never acted on: no pointer move, click, shortcut, or dial step. gestures share the pipe with motion, so they use the motion delay. after a second of late data the band's column says so.
+on a congested radio link the band's samples reached the mac up to 22 s late, in bursts, while the link stayed up. host arrival time can't see that. `ArrivalDelay` compares the band's timestamps with the mac's clock, and input more than 0.3 s late is never acted on: no pointer move, click, shortcut, or dial step. gestures share the pipe with motion, so they use the motion delay. after a second of late data the band's column says so. a held button is released.
 
-## developer log
+the orientation stream runs only while the cursor, calibration, or the readings page needs it. with it on from launch, the link was congested for minutes after each relaunch.
 
-`open -n --env KINESIS_MOTION_LOG=/path/motion.jsonl dist/Kinesis.app` writes every gyro, orientation, and gesture event with both clocks, one JSON object per line.
+## developer tools
+
+- `open -n --env KINESIS_MOTION_LOG=/path/motion.jsonl dist/Kinesis.app` writes every gyro, orientation, and gesture event with both clocks, one JSON object per line.
+- `KINESIS_LAB=1 ./scripts/build.sh` adds the practice lab: a full-screen field with targets, moving targets, and drags. open it from the cursor page or the menu bar. each run saves its motion log, pointer events, trials, and settings to `~/Library/Application Support/Kinesis/Lab`. every run of a mode shows the same targets.
+- `scripts/lab-compare.py` prints lab runs side by side: hits, times, misses, straightness, overshoot, and drift.
+- `scripts/pointer-lab.sh` replays a motion log or scripted moves through the real cursor, one display frame at a time, at any refresh rate. it compares playback delays and tunings, and it measures uneven frames, lag, jumps at a press, flick overshoot, and drift. a replay can't show how a person reacts to a changed pointer, so live lab runs decide.
