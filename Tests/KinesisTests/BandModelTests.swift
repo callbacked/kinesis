@@ -5,11 +5,15 @@ import Testing
 import KinesisCore
 @testable import Kinesis
 
-@MainActor private final class RecordedConnection: BandConnection {
+@MainActor final class RecordedConnection: BandConnection {
     private var onEvent: ((BandEvent) -> Void)?
     private var onEnd: ((Error?) -> Void)?
     var rawEMGMode = false
     var rawWriteError: Error?
+    private(set) var motionRequests: [MotionStreams] = []
+    private(set) var motionRestarts = 0
+    func setMotionStreams(_ streams: MotionStreams) { motionRequests.append(streams) }
+    func restartMotionStreams() { motionRestarts += 1 }
     func setRawEMGEnabled(_ enabled: Bool) throws {
         rawEMGMode = enabled
         if let rawWriteError { throw rawWriteError }
@@ -234,12 +238,499 @@ import KinesisCore
     var trusted = true
     var failure: Error?
     private(set) var actions: [MacAction] = []
+    private(set) var clicks: [(CGMouseButton, Int)] = []
+    /// The pointer, which the trackpad can move too.
+    var location = CGPoint(x: 800, y: 500)
+    let displaySize = CGSize(width: 1600, height: 1000)
+    private(set) var cursorMoves: [CGPoint] = []
+    var cursorLocation: CGPoint? { location }
+    private(set) var drags: [CGMouseButton] = []
+    func moveCursor(to point: CGPoint, dragging button: CGMouseButton?) throws -> CGPoint {
+        if let failure { throw failure }
+        cursorMoves.append(point)
+        if let button { drags.append(button) }
+        location = point
+        return point
+    }
+    /// Presses only, as (button, click count), where each landed, and every press and release in order.
+    private(set) var clickPoints: [CGPoint?] = []
+    private(set) var buttonEvents: [(button: CGMouseButton, down: Bool)] = []
+    func mouseButton(_ button: CGMouseButton, down: Bool, clicks: Int, at point: CGPoint?) throws {
+        if let failure { throw failure }
+        buttonEvents.append((button, down))
+        if down {
+            self.clicks.append((button, clicks))
+            clickPoints.append(point)
+        }
+        if let point { location = point }
+    }
     private(set) var accessRequests = 0
     func requestAccess() { accessRequests += 1 }
     func post(_ action: MacAction) throws {
         if let failure { throw failure }
         actions.append(action)
     }
+}
+
+@MainActor private final class TestClock { var now = 100.0 }
+
+/// A live band with Mac controls on, and a way to hold the forearm at an aim.
+/// 1600 points across 40 degrees: each degree moves the pointer 40 points.
+@MainActor private final class CursorRig {
+    let connection = RecordedConnection()
+    let controls = RecordingControls()
+    let clock = TestClock()
+    let model: BandModel
+    private(set) var stamp: UInt64 = 0
+
+    init(hand: BandHand = .right) {
+        let defaults = MemoryDefaults()
+        defaults.set(true, forKey: "setupCompleted")
+        // 40 points a degree both ways, and no slant.
+        defaults.set(40.0, forKey: "pointerSpeed")
+        defaults.set(try? JSONEncoder().encode(PointerReach(degreesAcrossWidth: 40, degreesAcrossHeight: 25)),
+                     forKey: "pointerReach.cursor-test-band.right")
+        let clock = clock
+        model = BandModel(defaults: defaults, connection: connection, controls: controls,
+                          sessionStore: SavedSessionStore(), clock: { clock.now }, cursorPacing: 0, cursorFrames: .timer(1.0 / 60))
+        model.selectedAddress = "cursor-test-band"
+        model.developerMode = true
+        // The smallest dead zone, 0.1°: 4 points. The dead zone has its own tests.
+        model.cursorSteadiness = 0
+        model.connect()
+        connection.send(.connected, at: clock.now)
+        connection.send(.heartbeat, at: clock.now)
+        connection.send(.handedness(hand), at: clock.now)
+        model.toggleControls()
+    }
+
+    /// Turns the arm steadily to an aim over `seconds`, then holds it briefly.
+    func sweep(to azimuth: Double, _ elevation: Double = 0, from start: (Double, Double), seconds: Double = 0.4,
+               settle: Double = 0.2) async throws {
+        let steps = Int(seconds * 128)
+        for step in 1...steps {
+            let t = Double(step) / Double(steps)
+            clock.now += 1.0 / 128
+            stamp += 7_812
+            // The gyro turns at the sweep's rate, around an axis other than the forearm.
+            let rate = hypot(azimuth - start.0, elevation - start.1) / seconds / AirPointer.gyroScale
+            connection.send(.gyro(timestamp: stamp, values: SIMD3(rate, 0, 0)), at: clock.now)
+            connection.send(.orientation(timestamp: stamp, values: bandQuaternion(azimuth: start.0 + (azimuth - start.0) * t,
+                                                                               elevation: start.1 + (elevation - start.1) * t)),
+                            at: clock.now)
+            // Let display frames pass as the arm moves, so the pointer follows along.
+            if step % 8 == 0 { try await Task.sleep(for: .milliseconds(17)) }
+        }
+        if settle > 0 { try await aim(azimuth, elevation, for: settle) }
+    }
+
+    /// Holds an aim at 128 Hz, then lets a few display frames pass.
+    func aim(_ azimuth: Double, _ elevation: Double = 0, twist: Double = 0, for seconds: Double = 0.6) async throws {
+        let end = clock.now + seconds
+        while clock.now < end {
+            clock.now += 1.0 / 128
+            stamp += 7_812
+            connection.send(.gyro(timestamp: stamp, values: .zero), at: clock.now)
+            connection.send(.orientation(timestamp: stamp, values: bandQuaternion(azimuth: azimuth, elevation: elevation, twist: twist)),
+                            at: clock.now)
+        }
+        try await Task.sleep(for: .milliseconds(60))
+    }
+
+    /// Nothing arrives for a while. In a dropout the band's clock moves on too;
+    /// in a backlog only the Mac's does, and what arrives next is that late.
+    func silence(_ seconds: Double, backlog: Bool = false) {
+        clock.now += seconds
+        if !backlog { stamp += UInt64(seconds * 1e6) }
+    }
+
+    /// A backlog clears: what arrives next is on time again.
+    func catchUp(_ seconds: Double) {
+        stamp += UInt64(seconds * 1e6)
+    }
+
+    func gesture(_ finger: String, _ action: String, derived: String = "unknown", synthetic: Bool = false) {
+        connection.send(.gesture(BandGesture(sequence: 1, timestampUs: 1, finger: finger, action: action,
+                                             derivedAction: derived, synthetic: synthetic, receivedAt: clock.now)),
+                        at: clock.now)
+    }
+
+    var pointer: CGPoint { controls.location }
+}
+
+private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(point.x - x) < 5 && abs(point.y - y) < 5 }
+
+@Test @MainActor func airCursorFollowsTheForearmAndOwnsPinchesUntilTurnedOff() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    try await rig.aim(0)
+    model.setAirCursorEnabled(true)
+    #expect(model.airCursorEnabled)
+    // Turning on moves nothing, and a still arm moves nothing.
+    try await rig.aim(0)
+    try await rig.aim(0)
+    #expect(rig.controls.cursorMoves.isEmpty)
+    // Left moves it left, and up moves it up.
+    try await rig.sweep(to: 10, from: (0, 0))
+    #expect(rig.pointer.x < 700 && abs(rig.pointer.y - 500) < 5)
+    let afterLeft = rig.pointer
+    try await rig.sweep(to: 10, 5, from: (10, 0))
+    #expect(rig.pointer.y < afterLeft.y - 50 && abs(rig.pointer.x - afterLeft.x) < 5)
+    // Twisting the wrist in place moves nothing.
+    let moves = rig.controls.cursorMoves.count
+    try await rig.aim(10, 5, twist: 60)
+    #expect(rig.controls.cursorMoves.count == moves)
+    // Pinches click once each; the band's other reports of the same contact do not.
+    rig.gesture("index", "press")
+    rig.gesture("index", "unknown", derived: "buttonPress")
+    rig.gesture("index", "press", derived: "buttonHold")
+    rig.gesture("index", "release")
+    rig.gesture("index", "tap")
+    rig.gesture("index", "doubletap")
+    rig.gesture("middle", "press")
+    rig.gesture("middle", "release")
+    rig.gesture("middle", "tap")
+    rig.gesture("index", "press", synthetic: true)
+    #expect(rig.controls.clicks.map { $0.0 } == [.left, .right])
+    #expect(rig.controls.clicks.allSatisfy { $0.1 == 1 })
+    #expect(model.totalGestureCount == 2)
+    // The dial stays off, and thumb swipes keep their shortcuts.
+    rig.connection.send(.dialState(true), at: rig.clock.now)
+    rig.connection.send(.dialTurn(20), at: rig.clock.now)
+    rig.gesture("thumb", "left")
+    #expect(rig.controls.actions == [.previousDesktop] && !model.dialEngaged)
+    model.setAirCursorEnabled(false)
+    let stopped = rig.controls.cursorMoves.count
+    try await rig.sweep(to: 30, from: (10, 5))
+    #expect(rig.controls.cursorMoves.count == stopped)
+    // Pausing, leaving developer mode, and disconnecting each turn it off.
+    model.setAirCursorEnabled(true)
+    model.pause()
+    #expect(!model.airCursorEnabled)
+    model.toggleControls()
+    model.setAirCursorEnabled(true)
+    model.developerMode = false
+    #expect(!model.airCursorEnabled)
+    model.developerMode = true
+    model.setAirCursorEnabled(true)
+    rig.connection.send(.disconnected, at: rig.clock.now)
+    #expect(!model.airCursorEnabled)
+    await model.shutdown()
+}
+
+@Test @MainActor func slowAimingIsFinerThanAQuickFlickOverTheSameTurn() async throws {
+    func travel(seconds: Double) async throws -> Double {
+        let rig = CursorRig()
+        try await rig.aim(0)
+        rig.model.setAirCursorEnabled(true)
+        try await rig.aim(0)
+        try await rig.sweep(to: 6, from: (0, 0), seconds: seconds)
+        await rig.model.shutdown()
+        return 800 - rig.pointer.x
+    }
+    let slow = try await travel(seconds: 3), quick = try await travel(seconds: 0.12)
+    // Six degrees at 40 points a degree is 240 points at the base scale.
+    #expect(slow > 0 && slow < 160)
+    #expect(quick > slow * 2)
+}
+
+@Test @MainActor func theTrackpadAndTheArmBothMoveTheSamePointer() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    rig.controls.location = CGPoint(x: 100, y: 100)
+    try await rig.aim(0)
+    #expect(rig.pointer == CGPoint(x: 100, y: 100))
+    try await rig.sweep(to: -5, from: (0, 0))
+    #expect(rig.pointer.x > 110 && abs(rig.pointer.y - 100) < 5)
+    await rig.model.shutdown()
+}
+
+@Test(arguments: ["index", "middle"])
+@MainActor func aPinchNeverStopsOrMovesThePointer(finger: String) async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    try await rig.sweep(to: 5, from: (0, 0))
+    // On target, and still a moment, as before a shot.
+    try await rig.aim(5, for: 0.3)
+    let aimed = rig.pointer
+    // The pinch nudges the arm 0.3° over 0.15 s, as measured, and the band reports it after.
+    try await rig.sweep(to: 5.3, from: (5, 0), seconds: 0.15, settle: 0)
+    try await Task.sleep(for: .milliseconds(40))
+    let twitched = rig.pointer
+    #expect(twitched.x < aimed.x - 2)
+    rig.gesture(finger, "press")
+    #expect(rig.controls.clicks.map { $0.0 } == [finger == "index" ? .left : .right])
+    // The press lands where the pointer is. Pressing where it aimed before the nudge
+    // made the pointer jump back, and people saw it snap.
+    let click = try #require(rig.controls.clickPoints.last ?? nil)
+    #expect(click == twitched)
+    // The pointer keeps following the arm through the pinch and its release.
+    let moves = rig.controls.cursorMoves.count
+    try await rig.sweep(to: 10, from: (5.3, 0))
+    rig.gesture(finger, "release")
+    try await rig.sweep(to: 12, from: (10, 0))
+    #expect(rig.controls.cursorMoves.count > moves + 2 && rig.pointer.x < click.x - 50)
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func aPinchWhileMovingPressesWhereThePointerIsWithoutASnapBack() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    // Mid-sweep, the pinch arrives: the press must land where the pointer is now.
+    try await rig.sweep(to: 6, from: (0, 0), seconds: 0.4, settle: 0)
+    rig.gesture("index", "press")
+    let press = try #require(rig.controls.clickPoints.last ?? nil)
+    #expect(press.x < 750 && rig.pointer == press)
+    // It keeps tracking: nothing is held back after the pinch.
+    try await rig.sweep(to: 9, from: (6, 0), seconds: 0.2, settle: 0)
+    try await Task.sleep(for: .milliseconds(40))
+    #expect(rig.pointer.x < press.x - 30)
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func slowingDownIntoAPinchClicksInPlaceAndIgnoresTheSettle() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    // Quick toward the target, then slowing onto it, then the pinch: as measured.
+    try await rig.sweep(to: 6, from: (0, 0), seconds: 0.3, settle: 0)
+    try await rig.sweep(to: 7, from: (6, 0), seconds: 0.15, settle: 0)
+    rig.gesture("index", "press")
+    // The movement from before the pinch lands first, and the press where it ends.
+    let press = try #require(rig.controls.clickPoints.last ?? nil)
+    #expect(press.x < 750 && rig.pointer == press)
+    // The arm drifts on half a degree as it settles. The pointer stays on the click.
+    try await rig.sweep(to: 7.5, from: (7, 0), seconds: 0.2, settle: 0)
+    try await Task.sleep(for: .milliseconds(40))
+    #expect(abs(rig.pointer.x - press.x) < 3)
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func pinchMoveReleaseDragsAndTwoQuickPinchesDoubleClick() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    try await rig.aim(0)
+    model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    // Pinch, move, let go: a drag.
+    rig.gesture("index", "press")
+    try await rig.sweep(to: 8, from: (0, 0))
+    rig.gesture("index", "release")
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false])
+    #expect(!rig.controls.drags.isEmpty && rig.controls.drags.allSatisfy { $0 == .left })
+    #expect(rig.pointer.x < 700)
+    // Two quick pinches in place: the second is a double-click.
+    try await rig.aim(8, for: 0.3)
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    rig.clock.now += 0.2
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    #expect(rig.controls.clicks.suffix(2).map(\.1) == [1, 2])
+    // A button is never left down: turning the cursor off lets go of it.
+    rig.gesture("middle", "press")
+    #expect(rig.controls.buttonEvents.last?.down == true)
+    model.setAirCursorEnabled(false)
+    #expect(rig.controls.buttonEvents.last.map { $0.down == false && $0.button == .right } == true)
+    await model.shutdown()
+}
+
+@Test @MainActor func aLateReleaseStillLetsGoOfTheButton() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    rig.gesture("index", "press")
+    // The link backs up while the pinch is held; the release arrives late.
+    rig.silence(2, backlog: true)
+    try await rig.aim(0, for: 0.2)
+    rig.gesture("index", "release")
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false])
+    // Once data is on time again, the next pinch clicks: the dropped release left nothing behind.
+    rig.catchUp(2)
+    try await rig.aim(0, for: 0.3)
+    rig.gesture("index", "press")
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false, true])
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func optionDuringADragLetsGoOfTheButton() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    rig.gesture("index", "press")
+    try await rig.sweep(to: 4, from: (0, 0))
+    // Pinches are ignored while Option is down, so the drag ends as Option goes down.
+    rig.model.setCursorRepositioning(true)
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false])
+    rig.gesture("index", "release")
+    rig.model.setCursorRepositioning(false)
+    try await rig.aim(4, for: 0.3)
+    rig.gesture("index", "press")
+    #expect(rig.controls.buttonEvents.map(\.down) == [true, false, true])
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func optionParksThePointerWhileTheArmMoves() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    rig.model.setCursorRepositioning(true)
+    try await rig.sweep(to: 25, -10, from: (0, 0))
+    rig.gesture("index", "press")
+    #expect(rig.model.cursorRepositioning && rig.controls.cursorMoves.isEmpty && rig.controls.clicks.isEmpty)
+    rig.model.setCursorRepositioning(false)
+    try await rig.aim(25, -10, for: 0.3)
+    #expect(rig.controls.cursorMoves.isEmpty)
+    try await rig.sweep(to: 20, -10, from: (25, -10))
+    #expect(rig.pointer.x > 810)
+    rig.model.setCursorRepositioning(true)
+    rig.model.pause()
+    #expect(!rig.model.cursorRepositioning && !rig.model.airCursorEnabled)
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func aGapInTheOrientationStreamNeverMakesThePointerJump() async throws {
+    let rig = CursorRig()
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    rig.silence(1)
+    try await rig.aim(30)
+    #expect(rig.controls.cursorMoves.isEmpty)
+    try await rig.sweep(to: 26, from: (30, 0))
+    #expect(rig.pointer.x > 810)
+    await rig.model.shutdown()
+}
+
+@Test @MainActor func calibrationTakesTheAimBeforeEachPinchAndNeverClicks() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    #expect(model.pointerCalibrated && model.pointerReach.degreesAcrossWidth == 40)
+    model.resetPointerReach()
+    #expect(!model.pointerCalibrated && model.pointerReach == .standard(for: .right))
+    try await rig.aim(0)
+    model.beginPointerCalibration()
+    #expect(model.pointerCalibration?.step == .left)
+    // Aim, pinch, and let the pinch nudge the arm two degrees before letting go.
+    for (azimuth, elevation) in [(14.0, 10.0), (-14.0, 10.0), (0.0, 17.0), (0.0, 3.0)] {
+        try await rig.aim(azimuth, elevation, for: 0.5)
+        rig.gesture("index", "press")
+        rig.gesture("index", "press", derived: "buttonHold")
+        try await rig.aim(azimuth + 2, elevation - 2, for: 0.2)
+        rig.gesture("index", "release")
+    }
+    // 28° between left and right is 70 % of the width: 40° across. 14° is 70 % of 20° up and down.
+    #expect(model.pointerCalibration == nil && model.pointerCalibrated)
+    #expect(abs(model.pointerReach.degreesAcrossWidth - 40) < 0.5 && abs(model.pointerReach.degreesAcrossHeight - 20) < 0.5)
+    // Measured across this 1600-point display, 40° sets 40 points a degree.
+    #expect(abs(model.cursorSpeed - 40) < 0.5)
+    #expect(rig.controls.clicks.isEmpty && rig.controls.cursorMoves.isEmpty && rig.controls.actions.isEmpty)
+    // Escape stops a calibration the same way it stops the cursor.
+    model.beginPointerCalibration()
+    model.setAirCursorEnabled(false)
+    #expect(model.pointerCalibration == nil && abs(model.pointerReach.degreesAcrossWidth - 40) < 0.5)
+    await model.shutdown()
+}
+
+@Test @MainActor func orientationStreamsOnlyWhileTheCursorCalibrationOrReadingsNeedIt() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    let orientationOnly = { rig.connection.motionRequests.last?.orientation }
+    #expect(orientationOnly() == false && rig.connection.motionRequests.allSatisfy(\.gyro))
+    try await rig.aim(0)
+    model.setAirCursorEnabled(true)
+    #expect(orientationOnly() == true)
+    model.setAirCursorEnabled(false)
+    #expect(orientationOnly() == false)
+    model.beginPointerCalibration()
+    #expect(orientationOnly() == true)
+    model.cancelPointerCalibration()
+    #expect(orientationOnly() == false)
+    model.setReadingsVisible(true)
+    #expect(orientationOnly() == true)
+    model.setReadingsVisible(false)
+    #expect(orientationOnly() == false)
+    await model.shutdown()
+}
+
+@Test @MainActor func dataThatArrivesLateIsNeverActedOn() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    try await rig.aim(0)
+    model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    // The link backs up: everything from here arrives two seconds after it happened.
+    rig.silence(2, backlog: true)
+    try await rig.aim(10, for: 1.2)
+    rig.gesture("index", "press")
+    #expect(rig.controls.cursorMoves.isEmpty && rig.controls.clicks.isEmpty)
+    #expect(model.linkCongested)
+    #expect(rig.connection.motionRestarts == 1)
+    // While it stays late, the restart is tried again every 20 s, not more often.
+    // The link itself stays up: status replies and sensor frames keep coming, only late.
+    for second in 1...21 {
+        rig.connection.send(.heartbeat, at: rig.clock.now)
+        rig.connection.send(.dataSeen, at: rig.clock.now)
+        try await rig.aim(10, for: 1)
+        if second == 10 { #expect(rig.connection.motionRestarts == 1) }
+    }
+    #expect(rig.connection.motionRestarts == 2)
+    // Without the cursor, a late swipe sends no shortcut either.
+    model.setAirCursorEnabled(false)
+    rig.gesture("thumb", "left")
+    #expect(rig.controls.actions.isEmpty)
+    await model.shutdown()
+}
+
+@Test func arrivalDelayFollowsTheBandClockAndItsRestarts() {
+    var delay = ArrivalDelay()
+    // Transit time varies around 20 ms: that is not delay.
+    #expect(delay.measure(band: 10, host: 1000.020) == 0)
+    #expect(abs(delay.measure(band: 10.01, host: 1000.045) - 0.015) < 1e-4)
+    // Four seconds of band time reach the Mac six seconds later.
+    #expect(abs(delay.measure(band: 14, host: 1006.020) - 2) < 0.01)
+    // The band restarted its clock: a fresh baseline, not a negative delay.
+    #expect(delay.measure(band: 0.5, host: 1007) == 0)
+    #expect(abs(delay.measure(band: 0.6, host: 1007.1)) < 0.001)
+}
+
+@Test @MainActor func afterDisconnectTheButtonSaysDisconnectingNotConnecting() async {
+    let connection = RecordedConnection()
+    connection.finishesOnStop = false
+    let model = BandModel(defaults: MemoryDefaults(), connection: connection, controls: RecordingControls(),
+                          sessionStore: SavedSessionStore(), clock: { 100 })
+    model.selectedAddress = "test-band"
+    model.connect()
+    #expect(model.nextAction == .connecting)
+    model.disconnect()
+    #expect(model.nextAction == .disconnecting && model.nextAction.waits)
+    connection.finish()
+    #expect(!model.nextAction.waits)
+    await model.shutdown()
+}
+
+@Test @MainActor func airCursorRejectsStaleClicksAndStopsWhenPermissionIsLost() async throws {
+    let rig = CursorRig(hand: .left)
+    try await rig.aim(0)
+    rig.model.setAirCursorEnabled(true)
+    rig.connection.send(.gesture(BandGesture(sequence: 1, timestampUs: 1, finger: "index", action: "press",
+                                             receivedAt: rig.clock.now - 0.2)), at: rig.clock.now - 0.2)
+    #expect(rig.controls.clicks.isEmpty)
+    rig.controls.trusted = false
+    try await rig.aim(10)
+    try await waitUntil { !rig.model.controlsEnabled }
+    #expect(!rig.model.airCursorEnabled && rig.controls.cursorMoves.isEmpty)
+    await rig.model.shutdown()
 }
 
 @Test(arguments: [BandHand.right, .left], [DialTarget.volume, .brightness])
@@ -679,7 +1170,7 @@ func recoveryScanIsCancelledBeforeShutdownCompletes(action: String) async throws
     await model.shutdown()
 }
 
-@MainActor private final class SavedSessionStore: MetaSessionStoring {
+@MainActor final class SavedSessionStore: MetaSessionStoring {
     var saved: MetaSession?
     private(set) var saves = 0
     private(set) var deletions = 0
@@ -1270,12 +1761,69 @@ private struct FakePairClient: BandPairClient {
     now += 1.5
     connection.send(.battery(80))
     #expect(model.streamHint == "subscribed but no data — is the band on your wrist and off the charger?")
-    // The first real frame clears it, and it stays clear once data flows.
-    connection.send(.dataSeen)
+    // Only fresh sensor frames clear the hint. Later silence must show it again.
+    connection.send(.dataSeen, at: now)
     #expect(model.streamHint == nil)
     now += 20
+    connection.send(.heartbeat, at: now)
     connection.send(.battery(81))
-    #expect(model.streamHint == nil)
+    #expect(model.streamHint == "sensor stream is quiet — is the band on your wrist and off the charger?")
+    await model.shutdown()
+}
+
+@Test @MainActor func sensorSilenceRecoversOnceDespiteStatusTrafficAndRequiresSustainedRecovery() async throws {
+    var now = 100.0
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: MemoryDefaults(), connection: connection,
+                          sessionStore: SavedSessionStore(), clock: { now })
+    model.selectedAddress = "test-band"
+    model.connect()
+    connection.send(.connected, at: now)
+    connection.send(.dataSeen, at: now)
+    now += 11
+    connection.send(.heartbeat, at: now)
+    try await waitUntil { connection.starts == 2 }
+    #expect(connection.stops == 1)
+
+    // One brief sensor burst after reconnecting must not start a reconnect loop.
+    connection.send(.connected, at: now)
+    connection.send(.dataSeen, at: now)
+    now += 11
+    connection.send(.heartbeat, at: now)
+    try await Task.sleep(for: .milliseconds(650))
+    #expect(connection.starts == 2 && connection.stops == 1)
+    #expect(model.streamHint != nil)
+
+    // Thirty seconds of continuous sensor data restores the recovery budget.
+    for _ in 0..<62 {
+        now += 0.5
+        connection.send(.dataSeen, at: now)
+        connection.send(.heartbeat, at: now)
+    }
+    now += 11
+    connection.send(.heartbeat, at: now)
+    try await waitUntil { connection.starts == 3 }
+    #expect(connection.stops == 2)
+    await model.shutdown()
+}
+
+@Test @MainActor func sensorRecoveryIgnoresChargingAndStaleFrames() async throws {
+    var now = 100.0
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: MemoryDefaults(), connection: connection,
+                          sessionStore: SavedSessionStore(), clock: { now })
+    model.selectedAddress = "test-band"
+    model.connect()
+    connection.send(.connected, at: now)
+    connection.send(.dataSeen, at: now)
+    connection.send(.batteryStatus(BandBatteryStatus(level: 80, charging: true)), at: now)
+    now += 11
+    connection.send(.heartbeat, at: now)
+    connection.send(.dataSeen, at: 100)
+    try await Task.sleep(for: .milliseconds(650))
+    #expect(connection.stops == 0 && model.streamHint != nil)
+    connection.send(.batteryStatus(BandBatteryStatus(level: 80, charging: false)), at: now)
+    try await waitUntil { connection.starts == 2 }
     await model.shutdown()
 }
 
@@ -1389,4 +1937,73 @@ private struct FakePairClient: BandPairClient {
     #expect(!model.rawEMGEnabled && !connection.rawEMGMode)
     #expect(model.developerMode && !model.rawEMGActive)
     await model.shutdown()
+}
+
+@Test @MainActor func theCursorPageLightsUpEachPointerActionOnceDone() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    try await rig.aim(0)
+    model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    // With the page closed, nothing is tracked.
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    #expect(model.cursorSkills.isEmpty)
+    model.setCursorPageVisible(true)
+    #expect(model.wantedMotionStreams.orientation)
+    rig.gesture("middle", "press")
+    rig.gesture("middle", "release")
+    rig.gesture("index", "press")
+    try await rig.sweep(to: 3, from: (0, 0), seconds: 0.4, settle: 0.2)
+    rig.gesture("index", "release")
+    #expect(model.cursorSkills == [.rightClick, .click, .drag])
+    // Two presses in place are a double-click.
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    #expect(model.cursorSkills.contains(.doubleClick))
+    // Opening the page again starts over.
+    model.setCursorPageVisible(false)
+    model.setCursorPageVisible(true)
+    #expect(model.cursorSkills.isEmpty)
+    await model.shutdown()
+}
+
+@Test @MainActor func speedIsTheSameOnEveryDisplayAndCarriesOverFromSensitivity() {
+    let defaults = MemoryDefaults()
+    defaults.set(2.0, forKey: "pointerSensitivity")
+    defaults.set(2.2, forKey: "pointerFlickBoost")
+    let model = BandModel(defaults: defaults, connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
+    #expect(model.cursorSpeed == PointerReach.standardSpeed * 2)
+    #expect(model.cursorFlickBoost == 2.2 && model.airPointer.tuning.fastFactor == 2.2)
+    model.cursorFlickBoost = 1.2
+    #expect(model.airPointer.tuning.fastFactor == 1.2)
+    let fresh = BandModel(defaults: MemoryDefaults(), connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
+    #expect(fresh.cursorSpeed == PointerReach.standardSpeed && fresh.cursorFlickBoost == PointerAcceleration.fastFactor)
+}
+
+@Test @MainActor func resetAllPutsTheLeversBackAndKeepsTheCalibration() {
+    let defaults = MemoryDefaults()
+    let reach = PointerReach(degreesAcrossWidth: 70, degreesAcrossHeight: 30, upTilt: 0.2)
+    defaults.set(try? JSONEncoder().encode(reach), forKey: "pointerReach..right")
+    let model = BandModel(defaults: defaults, connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
+    model.cursorSpeed = 80
+    model.cursorFlickBoost = 2.3
+    model.cursorSteadiness = 0.9
+    model.resetCursorLevers()
+    #expect(model.cursorSpeed == PointerReach.standardSpeed && model.cursorFlickBoost == PointerAcceleration.fastFactor)
+    #expect(model.cursorSteadiness == BandModel.standardSteadiness && model.airPointer.tuning.fastFactor == PointerAcceleration.fastFactor)
+    #expect(defaults.data(forKey: "pointerReach..right") != nil)
+}
+
+@Test @MainActor func theFirstStreamRequestAsksOnlyForWhatIsUsed() {
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: MemoryDefaults(), connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
+    // Before any connection: gyro for the dial, and no orientation until something shows or uses it.
+    #expect(connection.motionRequests == [MotionStreams(gyro: true, orientation: false)])
+    // Moving the steadiness lever touches neither the streams nor the reach.
+    let reach = model.pointerReach
+    model.cursorSteadiness = 0.9
+    #expect(connection.motionRequests.count == 1 && model.pointerReach == reach)
 }

@@ -21,6 +21,7 @@ import KinesisCore
     for event in [down, up] {
         let key = try #require(NSEvent(cgEvent: event))
         #expect(key.keyCode == 53)
+        #expect(event.getIntegerValueField(.eventSourceUserData) == MacShortcuts.shortcutEventTag)
         #expect(key.modifierFlags.intersection([.control, .command, .shift, .option, .function]).isEmpty)
     }
 }

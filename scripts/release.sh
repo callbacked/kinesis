@@ -3,6 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 swift test -Xswiftc -warnings-as-errors
+# A release is never a dev build.
+unset KINESIS_DEV
 ./scripts/build.sh
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Packaging/Info.plist)
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

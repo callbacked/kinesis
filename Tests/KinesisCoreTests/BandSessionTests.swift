@@ -209,6 +209,17 @@ func startupIgnoresInputUntilDeviceInfoSucceeds(linkReady: Bool) throws {
     #expect(peer.session.motionMessages == 1)
 }
 
+@Test func orientationPreservesTheWireOrderAndDeviceTimestamp() throws {
+    var peer = try Peer()
+    let payload = BandWire.field(1, 1) + BandWire.field(2, 1_234_000)
+        + BandWire.field(3, Data(hex: "0000003f000000bf0000003f0000003f"))
+    let events = try peer.send(kind: 0x02000212, payload: payload, now: 101)
+    let event = try #require(events.first { if case .orientation = $0.payload { true } else { false } })
+    guard case .orientation(let timestamp, let values) = event.payload else { return }
+    #expect(timestamp == 1_234_000 && values == SIMD4(0.5, -0.5, 0.5, 0.5))
+    #expect(events.contains { if case .dataSeen = $0.payload { true } else { false } })
+}
+
 @Test func rejectedStartupChannelsFailImmediatelyWithoutReportingReady() throws {
     var peer = try Peer(completeSetup: false)
     _ = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: BandWire.field(1, 1))
@@ -394,6 +405,18 @@ private func engagement(_ events: [BandEvent]) -> [Bool] {
 }
 private func movement(_ events: [BandEvent]) -> [Double] {
     events.compactMap { if case .dialTurn(let value) = $0.payload { value } else { nil } }
+}
+
+@Test func encryptedGyroExposesAllThreeSignedAxesWithoutChangingSubscriptions() throws {
+    var peer = try Peer()
+    let payload = BandWire.field(1, 7) + BandWire.field(2, 1_234_567)
+        + BandWire.field(3, Int16(-123).littleEndianData + Int16(456).littleEndianData + Int16(-789).littleEndianData)
+    let events = try peer.send(kind: 0x0200020f, payload: payload, now: 1)
+    let event = try #require(events.first { if case .gyro = $0.payload { true } else { false } })
+    guard case .gyro(let timestamp, let values) = event.payload else { return }
+    #expect(timestamp == 1_234_567)
+    #expect(values == SIMD3(-123, 456, -789))
+    #expect(event.receivedAt == 101)
 }
 
 @Test func encryptedInputDrivesTheDialAndReleasesOnMotionLoss() throws {
@@ -759,4 +782,95 @@ private func batteryReply(id: UInt64, level: UInt64 = 84, charging: UInt64? = 1)
         values += decoded.values.count
     }
     print("EMG capture replay: \(lines.count) batches, \(values) channel values matched exactly")
+}
+
+/// The band's answer to a stream request: accepted, with these streams now on.
+private func streamReply(_ peer: inout Peer, id: UInt64, gyro: Bool, orientation: Bool, now: Double)
+    throws -> (events: [BandEvent], requests: [DataXFrame]) {
+    try peer.exchange(channel: 5, kind: 0x02000315, payload: BandWire.field(1, id) + BandWire.field(2, 1)
+        + BandWire.field(5, BandWire.field(3, 1) + BandWire.field(6, gyro ? 1 : 0) + BandWire.field(8, orientation ? 1 : 0)), now: now)
+}
+
+/// The id and the requested flags of one stream request.
+private func streamAsk(_ frame: DataXFrame) throws -> (id: UInt64, gesture: UInt64, gyro: UInt64, orientation: UInt64) {
+    let fields = try ProtoFields(frame.payload)
+    let control = try ProtoFields(fields.bytes(4))
+    return (try fields.integer(1), try control.integer(3), try control.integer(6), try control.integer(8))
+}
+
+private func motionConfirmations(_ events: [BandEvent]) -> [(MotionStreams, Bool)] {
+    events.compactMap { if case .motionStreams(let streams, _, let accepted) = $0.payload { (streams, accepted) } else { nil } }
+}
+
+@Test func motionStreamsSwitchWhileConnectedAndRestartOnRequest() throws {
+    var peer = try Peer()
+    _ = try streamReply(&peer, id: 3, gyro: true, orientation: true, now: 1)
+    #expect(peer.session.streamsEnabled && peer.session.motionStreams == .all)
+    // Orientation off: gestures and gyro stay on, and every flag is explicit.
+    let off = try peer.requests(peer.session.setMotionStreams(MotionStreams(gyro: true, orientation: false), at: 101))
+    let ask = try streamAsk(try #require(off.first))
+    #expect(off.count == 1 && off[0].channel == 0x8005)
+    #expect(ask.gesture == 1 && ask.gyro == 1 && ask.orientation == 0)
+    // A second change waits until the first is answered.
+    #expect(try peer.session.setMotionStreams(.all, at: 101).isEmpty)
+    let answered = try streamReply(&peer, id: ask.id, gyro: true, orientation: false, now: 2)
+    #expect(motionConfirmations(answered.events).map(\.1) == [true])
+    #expect(peer.session.motionStreams == MotionStreams(gyro: true, orientation: false))
+    // With orientation off, a status reply without it is still a live subscription.
+    _ = try streamReply(&peer, id: 5, gyro: true, orientation: false, now: 2)
+    #expect(peer.session.streamsEnabled)
+    let back = try peer.requests(peer.session.flushMotion(at: 102))
+    let backAsk = try streamAsk(try #require(back.first))
+    #expect(backAsk.orientation == 1 && backAsk.gyro == 1)
+    _ = try streamReply(&peer, id: backAsk.id, gyro: true, orientation: true, now: 3)
+    #expect(peer.session.motionStreams == .all)
+    // A restart turns motion off, and on again as soon as the band confirms.
+    let restart = try peer.requests(peer.session.restartMotionStreams(at: 103))
+    let offAsk = try streamAsk(try #require(restart.first))
+    #expect(offAsk.gyro == 0 && offAsk.orientation == 0 && offAsk.gesture == 1)
+    let quiet = try streamReply(&peer, id: offAsk.id, gyro: false, orientation: false, now: 4)
+    let onAsk = try streamAsk(try #require(quiet.requests.first))
+    #expect(onAsk.gyro == 1 && onAsk.orientation == 1)
+    _ = try streamReply(&peer, id: onAsk.id, gyro: true, orientation: true, now: 5)
+    #expect(peer.session.motionStreams == .all)
+    // A band that never answers is given up on, so the next change can go out.
+    let lost = try peer.requests(peer.session.setMotionStreams(.none, at: 106))
+    #expect(lost.count == 1)
+    #expect(motionConfirmations(peer.session.tick(at: 114.5)).map(\.1) == [false])
+    #expect(try peer.requests(peer.session.setMotionStreams(.none, at: 115)).count == 1)
+}
+
+@Test func aSubscriptionAsksOnlyForTheWantedMotionAndStopTurnsEverythingOff() throws {
+    var peer = try Peer(completeSetup: false)
+    // Set before the subscription: it simply asks for less.
+    #expect(try peer.session.setMotionStreams(MotionStreams(gyro: true, orientation: false), at: 100).isEmpty)
+    let ready = BandWire.field(1, 1) + BandWire.field(2, Data(repeating: 1, count: 16))
+    _ = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: ready)
+    let opened = try peer.exchange(channel: 3, kind: 0x02000315,
+        payload: BandWire.field(1, 1) + BandWire.field(2, 1) + BandWire.field(4, Data()))
+    let subscribe = try #require(opened.requests.first { (try? ProtoFields($0.payload).integer(1)) == 3 })
+    let ask = try streamAsk(subscribe)
+    #expect(ask.gesture == 1 && ask.gyro == 1 && ask.orientation == 0)
+    _ = try streamReply(&peer, id: 3, gyro: true, orientation: false, now: 1)
+    #expect(peer.session.streamsEnabled)
+    let stop = try streamAsk(try #require(peer.requests(peer.session.stop()).first))
+    #expect(stop.id == 4 && stop.gesture == 0 && stop.gyro == 0 && stop.orientation == 0)
+}
+
+@Test func aRestartQueuedBehindAnUnansweredChangeStillGoesOut() throws {
+    var peer = try Peer()
+    _ = try streamReply(&peer, id: 3, gyro: true, orientation: true, now: 1)
+    // A change goes out and is never answered. A restart asked for meanwhile waits.
+    let first = try peer.requests(peer.session.setMotionStreams(MotionStreams(gyro: true, orientation: false), at: 100))
+    #expect(first.count == 1)
+    #expect(try peer.session.restartMotionStreams(at: 101).isEmpty)
+    // The unanswered change is given up. The restart must not be given up with it.
+    #expect(motionConfirmations(peer.session.tick(at: 108.5)).map(\.1) == [false])
+    let off = try peer.requests(peer.session.flushMotion(at: 109))
+    let offAsk = try streamAsk(try #require(off.first))
+    #expect(offAsk.gyro == 0 && offAsk.orientation == 0)
+    // Once off, it comes back on as the unanswered change asked: gyro without orientation.
+    let quiet = try streamReply(&peer, id: offAsk.id, gyro: false, orientation: false, now: 110)
+    let onAsk = try streamAsk(try #require(quiet.requests.first))
+    #expect(onAsk.gyro == 1 && onAsk.orientation == 0)
 }

@@ -26,6 +26,11 @@ public struct BandEvent: Sendable {
         case gesture(BandGesture)
         case dialState(Bool)
         case dialTurn(Double)
+        case gyro(timestamp: UInt64, values: SIMD3<Double>)
+        /// The band confirmed (or refused, or never answered) a change of motion streams.
+        case motionStreams(MotionStreams, confirmedAfter: Double, accepted: Bool)
+        /// Unit quaternion in captured wire order: w, x, y, z.
+        case orientation(timestamp: UInt64, values: SIMD4<Double>)
         /// A decoded sensor data frame arrived (gesture, motion, orientation, or
         /// raw emg). Tells streaming data apart from ack-only liveness.
         case dataSeen
@@ -265,4 +270,16 @@ public struct ActionGate: Sendable {
         lastAction = now
         return true
     }
+}
+
+/// Which motion streams the band sends, besides gestures.
+public struct MotionStreams: Equatable, Sendable {
+    public var gyro: Bool
+    public var orientation: Bool
+    public init(gyro: Bool, orientation: Bool) {
+        self.gyro = gyro
+        self.orientation = orientation
+    }
+    public static let all = MotionStreams(gyro: true, orientation: true)
+    public static let none = MotionStreams(gyro: false, orientation: false)
 }

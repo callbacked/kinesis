@@ -8,9 +8,41 @@ extension Bundle {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = BandModel()
-    func applicationDidFinishLaunching(_ notification: Notification) { model.startAutomatically() }
+    private var cursorKeyMonitors: [Any] = []
+    #if KINESIS_DEV
+    private var calibrationOverlay: CalibrationOverlay?
+    #endif
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        #if KINESIS_DEV
+        calibrationOverlay = CalibrationOverlay(model: model)
+        #endif
+        // Local monitors cover Kinesis; global monitors cover whichever app the
+        // user is pointing at. Both use the app's existing Accessibility access.
+        if let monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged], handler: { [weak self] event in
+            self?.handleCursorKey(event)
+            return event
+        }) { cursorKeyMonitors.append(monitor) }
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .flagsChanged], handler: { [weak self] event in
+            self?.handleCursorKey(event)
+        }) { cursorKeyMonitors.append(monitor) }
+        model.startAutomatically()
+    }
+    private func handleCursorKey(_ event: NSEvent) {
+        // A mapped thumb swipe can send Escape without disabling the cursor.
+        guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != MacShortcuts.shortcutEventTag else { return }
+        #if KINESIS_DEV
+        // Escape in the practice lab ends a run. It must not turn the cursor off too.
+        if event.type == .keyDown, PracticeWindow.shared.owns(event) { return }
+        #endif
+        if event.type == .keyDown, event.keyCode == 53 { model.setAirCursorEnabled(false) }
+        model.setCursorRepositioning(event.modifierFlags.contains(.option))
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        #if KINESIS_DEV
+        // A run in progress saves what it has.
+        PracticeWindow.shared.close()
+        #endif
         Task {
             await model.shutdown()
             sender.reply(toApplicationShouldTerminate: true)
@@ -74,7 +106,7 @@ private struct BandMenu: View {
         switch model.nextAction {
         case .pair:
             Button("pair band…") { open() }
-        case .pairing, .connecting:
+        case .pairing, .connecting, .disconnecting:
             Button(model.nextAction.title) {}.disabled(true)
         case .connect:
             Button("connect") { model.connect() }
@@ -83,6 +115,13 @@ private struct BandMenu: View {
         }
         if model.live || model.wantsConnection {
             Button("disconnect") { model.disconnect() }
+        }
+        if model.developerMode {
+            Toggle("air cursor", isOn: Binding(get: { model.airCursorEnabled }, set: { model.setAirCursorEnabled($0) }))
+                .disabled(!model.airCursorEnabled && !model.canUseAirCursor)
+            #if KINESIS_DEV
+            Button("open lab") { PracticeWindow.shared.open(model: model) }
+            #endif
         }
         Divider()
         Button("open kinesis") { open() }

@@ -54,6 +54,8 @@ struct HandSceneView: NSViewRepresentable {
     /// Setup's hand acts out its gesture the moment it appears. Everywhere else the hand
     /// appears at rest: the last gesture is old news, and it is not replayed.
     var demonstrates = false
+    /// Degrees the forearm has turned from rest, left and up, for a hand that mirrors the arm.
+    var aim: SIMD2<Double>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
@@ -74,6 +76,7 @@ struct HandSceneView: NSViewRepresentable {
     func updateNSView(_ view: SCNView, context: Context) {
         context.coordinator.setBackground(dark: colorScheme == .dark)
         context.coordinator.setHand(hand)
+        context.coordinator.setAim(aim, hand: hand, animated: !reduceMotion)
         context.coordinator.show(highlight, gesture: gesture, revision: revision, sustained: sustained,
                                  roll: Float(roll), animated: !reduceMotion)
     }
@@ -210,6 +213,21 @@ struct HandSceneView: NSViewRepresentable {
 
         func setHand(_ hand: BandHand) {
             handRoot.scale = SCNVector3(hand == .left ? -1 : 1, 1, 1)
+        }
+
+        /// Turns the whole hand as the forearm turns. Seen from the thumb side, the
+        /// fingers point where the arm points: raising the arm tilts them up in the
+        /// picture, and turning it left swings them toward the wearer's left.
+        func setAim(_ aim: SIMD2<Double>?, hand: BandHand, animated: Bool = true) {
+            let left = Float(aim?.x ?? 0) * .pi / 180
+            let up = Float(aim?.y ?? 0) * .pi / 180
+            // A left hand is drawn mirrored, with its fingers to the right.
+            let pitch = simd_quatf(angle: hand == .left ? up : -up, axis: [0, 0, 1])
+            let yaw = simd_quatf(angle: left, axis: [0, 1, 0])
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = animated ? 0.08 : 0
+            handRoot.simdOrientation = yaw * pitch
+            SCNTransaction.commit()
         }
 
         func setBackground(dark: Bool) {

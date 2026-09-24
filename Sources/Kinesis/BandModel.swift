@@ -3,6 +3,7 @@ import Combine
 import Foundation
 import KinesisCore
 import OSLog
+import simd
 
 @MainActor
 enum EnrollmentStage: Equatable {
@@ -29,7 +30,7 @@ final class BandModel: ObservableObject {
     @Published private(set) var devices: [BandDevice] = []
     @Published private(set) var discoveredAddresses: Set<String> = []
     @Published var selectedAddress = "" {
-        didSet { saveBand(); refreshIdentity() }
+        didSet { saveBand(); refreshIdentity(); setAirCursorEnabled(false); loadPointerReach() }
     }
     @Published private(set) var phase = "Disconnected"
     @Published private(set) var busy = false
@@ -88,9 +89,91 @@ final class BandModel: ObservableObject {
     @Published var developerMode = false {
         didSet {
             defaults.set(developerMode, forKey: "developerMode")
-            if !developerMode { rawEMGEnabled = false }
+            if !developerMode { rawEMGEnabled = false; setAirCursorEnabled(false) }
         }
     }
+    @Published private(set) var airCursorEnabled = false {
+        didSet { if airCursorEnabled != oldValue { updateMotionStreams() } }
+    }
+    /// The readings page shows orientation, so it needs that stream while it is open.
+    @Published private(set) var readingsVisible = false {
+        didSet { if readingsVisible != oldValue { updateMotionStreams() } }
+    }
+    @Published private(set) var cursorRepositioning = false
+    /// The cursor page is open. It shows the arm live, so it needs orientation too.
+    @Published private(set) var cursorPageVisible = false {
+        didSet { if cursorPageVisible != oldValue { updateMotionStreams() } }
+    }
+    /// While the cursor page is open, 20 times a second: how fast the arm turns, in
+    /// degrees a second, smoothed over a quarter second so the picture stays calm.
+    @Published private(set) var cursorArmSpeed = 0.0
+    private var calmArmSpeed = 0.0
+    /// While the cursor page is open, 20 times a second: where the forearm points.
+    @Published private(set) var cursorAim: ForearmAim?
+    private var cursorLiveAt = (armSpeed: -Double.infinity, aim: -Double.infinity)
+    /// Pointer actions tried since the cursor page opened, so it can show them done.
+    @Published private(set) var cursorSkills: Set<CursorSkill> = []
+    enum CursorSkill: CaseIterable { case click, rightClick, doubleClick, drag }
+    /// Points the pointer moves per degree of arm turn, before acceleration.
+    @Published var cursorSpeed = PointerReach.standardSpeed {
+        didSet { defaults.set(cursorSpeed, forKey: "pointerSpeed") }
+    }
+    /// How much quick moves speed up: the top acceleration factor.
+    @Published var cursorFlickBoost = PointerAcceleration.fastFactor {
+        didSet {
+            defaults.set(cursorFlickBoost, forKey: "pointerFlickBoost")
+            airPointer.tuning.fastFactor = cursorFlickBoost
+        }
+    }
+    static let standardSteadiness = 0.5
+    @Published var cursorSteadiness = standardSteadiness {
+        didSet {
+            defaults.set(cursorSteadiness, forKey: "pointerStillness")
+            airPointer.steadiness = cursorSteadiness
+        }
+    }
+    var canUseAirCursor: Bool { developerMode && live && controlsEnabled && handConfirmed && pendingHand == nil }
+    /// How far the forearm turns to cross the screen: measured by calibration, or the standard reach.
+    @Published private(set) var pointerReach = PointerReach.standard(for: .right) {
+        didSet { pointerHome.reset() }
+    }
+    @Published private(set) var pointerCalibrated = false
+    /// Non-nil while the three calibration targets are on screen.
+    @Published private(set) var pointerCalibration: PointerCalibration? {
+        didSet { if (pointerCalibration == nil) != (oldValue == nil) { updateMotionStreams() } }
+    }
+    @Published private(set) var pointerCalibrationProblem: String?
+    /// The last half second of raw, on-time aim, so a calibration pinch can use the aim from just before it.
+    private var recentAims: [(time: Double, aim: ForearmAim)] = []
+    private var calibrationPinchDown = false
+    private(set) var airPointer = AirPointer()
+    private var cursorNeedsAnchor = true
+    private var cursorMotionResumesAt = -Double.infinity
+    private var cursorLastOrientation = -Double.infinity
+    /// The mouse button a pinch is holding down, so moving drags and letting go releases.
+    private var heldButton: (button: CGMouseButton, finger: String, clicks: Int)?
+    private var lastPress: (time: Double, point: CGPoint, button: CGMouseButton, clicks: Int)?
+    /// Two presses this close in time and space are a double-click, as with a trackpad.
+    static let doubleClickTime = 0.45
+    static let doubleClickDistance = 6.0
+    private var cursorTicker: FrameTicker?
+    private var cursorPacer: PointerPacer
+    private var pointerHome = PointerHome()
+    /// Where this app last put the pointer, to notice when the trackpad moves it.
+    private var cursorLastPosted: CGPoint?
+    private let cursorFrames: CursorFrames
+    /// True while the band's data reaches the Mac late: a congested or blocked radio link.
+    @Published private(set) var linkCongested = false
+    /// Input later than this is never acted on: no click, shortcut, dial step, or pointer move.
+    static let lateInput = 0.3
+    private var motionDelay = ArrivalDelay()
+    private var linkDelay = 0.0
+    private var linkDelayAt = -Double.infinity
+    private var linkLateSince: Double?
+    private var linkOnTimeSince: Double?
+    private var lastMotionRestart = -Double.infinity
+    private var cursorPressedFingers: Set<String> = []
+    private var cursorArmedAt = Double.infinity
     @Published var rawEMGEnabled = false {
         didSet {
             guard rawEMGEnabled != oldValue else { return }
@@ -114,6 +197,7 @@ final class BandModel: ObservableObject {
     @Published private(set) var rawEMGChanging = false
     @Published private(set) var rawEMGError: String?
     let readings = EMGReadings()
+    let motion = MotionReadings()
     var rawEMGFrames: Int { readings.frames }
     var rawEMGBytes: Int { readings.bytes }
     @Published private(set) var rawEMGRate = 0.0
@@ -172,6 +256,12 @@ final class BandModel: ObservableObject {
     private var maxInputGap = 0.0
     /// When the subscription acknowledgement arrived, waiting for the first frame.
     private var subscribedAt: Double?
+    private var lastSensorAt: Double?
+    private var sensorHealthySince: Double?
+    // Carry this budget across reconnects. An off-wrist band must not loop just
+    // because status replies continue while sensors are asleep.
+    private var sensorRecoveryUsed = false
+    private var sensorRecoveryPending = false
     private var rateAt = 0.0
     private var rateFrames = 0
     private var rateSamples = 0
@@ -253,8 +343,14 @@ final class BandModel: ObservableObject {
          workspaceNotifications: NotificationCenter = NSWorkspace.shared.notificationCenter,
          pairClient: @escaping @Sendable (MetaSession) -> any BandPairClient = { MetaPairClient(session: $0) },
          sessionStore: any MetaSessionStoring = MetaSessionStore(),
-         clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
+         clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
+         cursorPacing: Double = PointerPacer.playbackSeconds,
+         cursorFrames: CursorFrames = .display,
+         cursorTuning: AirPointer.Tuning = .init()) {
         self.clock = clock
+        cursorPacer = PointerPacer(seconds: cursorPacing)
+        self.cursorFrames = cursorFrames
+        airPointer.tuning = cursorTuning
         self.defaults = defaults
         self.started = clock()
         self.metricsAt = clock()
@@ -266,6 +362,26 @@ final class BandModel: ObservableObject {
         hasSavedMetaSession = sessionStore.hasSavedSession()
         startsAutomatically = defaults.bool(forKey: "startsAutomatically")
         developerMode = defaults.bool(forKey: "developerMode")
+        let speed = defaults.double(forKey: "pointerSpeed")
+        if PointerReach.speeds.contains(speed) {
+            cursorSpeed = speed
+        } else {
+            // Before speed, a sensitivity multiplied a scale per display.
+            let sensitivity = defaults.double(forKey: "pointerSensitivity")
+            if (0.25...4).contains(sensitivity) {
+                cursorSpeed = min(PointerReach.speeds.upperBound, max(PointerReach.speeds.lowerBound, PointerReach.standardSpeed * sensitivity))
+            }
+        }
+        let boost = defaults.double(forKey: "pointerFlickBoost")
+        if PointerAcceleration.flickBoosts.contains(boost) {
+            cursorFlickBoost = boost
+            airPointer.tuning.fastFactor = boost
+        }
+        if defaults.object(forKey: "pointerStillness") != nil {
+            let steadiness = defaults.double(forKey: "pointerStillness")
+            if (0...1).contains(steadiness) { cursorSteadiness = steadiness }
+        }
+        airPointer.steadiness = cursorSteadiness
         rawEMGEnabled = developerMode && defaults.bool(forKey: "rawEMGEnabled")
         try? connection.setRawEMGEnabled(rawEMGEnabled)
         bandHand = BandHand(rawValue: defaults.string(forKey: "bandHand") ?? "") ?? .right
@@ -292,6 +408,9 @@ final class BandModel: ObservableObject {
         let sensitivity = defaults.double(forKey: "dialSensitivity")
         if (0.5...4).contains(sensitivity) { dialSensitivity = sensitivity }
         refreshIdentity()
+        // Observers don't run during init, so apply what they would have.
+        loadPointerReach()
+        updateMotionStreams()
         ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect().sink { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -512,6 +631,7 @@ final class BandModel: ObservableObject {
         guard !selectedAddress.isEmpty, !busy, !quitting else { return }
         wantsConnection = true
         retries = 0
+        sensorRecoveryUsed = false
         saveBand()
         run(.connect(selectedAddress))
     }
@@ -555,6 +675,118 @@ final class BandModel: ObservableObject {
         lastAction = "Controls are paused"
     }
 
+    func setAirCursorEnabled(_ enabled: Bool) {
+        if !enabled { cancelPointerCalibration(); releaseHeldButton() }
+        guard !enabled || (canUseAirCursor && pointerCalibration == nil) else { return }
+        guard enabled != airCursorEnabled else { return }
+        airCursorEnabled = enabled
+        cursorRepositioning = false
+        // Start from wherever the pointer is.
+        cursorNeedsAnchor = true
+        cursorMotionResumesAt = -.infinity
+        cursorTicker?.stop()
+        cursorTicker = nil
+        cursorPacer.clear()
+        pointerHome.reset()
+        cursorLastPosted = nil
+        if enabled {
+            // One move per display frame. The orientation arrives at 128 Hz.
+            switch cursorFrames {
+            case .display: cursorTicker = FrameTicker { [weak self] in self?.flushCursorMovement() }
+            case .timer(let interval): cursorTicker = FrameTicker(timerInterval: interval) { [weak self] in self?.flushCursorMovement() }
+            case .manual: break
+            }
+        }
+        cursorPressedFingers = Set(pinchedFinger.map { [$0] } ?? [])
+        cursorArmedAt = enabled ? clock() : .infinity
+        router.reset()
+        resetDial()
+        dialEngaged = false
+        dialTurned = false
+        dialEndedAt = clock()
+        if controlsEnabled { gate.arm(at: clock()) }
+        lastAction = enabled ? "Air cursor on · Escape to stop" : "Air cursor off"
+    }
+
+    func setCursorRepositioning(_ repositioning: Bool) {
+        let active = airCursorEnabled && repositioning
+        guard active != cursorRepositioning else { return }
+        cursorRepositioning = active
+        // The arm was set down somewhere new, like a lifted mouse: that is home now.
+        if !active { pointerHome.reset() }
+        // Pinches are ignored while Option is down, so a drag could never be let go. End it now.
+        if active { releaseHeldButton() }
+        cursorPressedFingers.removeAll()
+        pinchedFinger = nil
+        // Like lifting a mouse: movement while Option is down is dropped.
+        steadyCursor(until: clock() + 0.12)
+    }
+
+    /// What moves the pointer on each frame.
+    enum CursorFrames {
+        /// Every refresh of the display under the pointer.
+        case display
+        /// A timer, for tests written around a fake clock.
+        case timer(Double)
+        /// Whoever calls `cursorFrame()`, as the pointer lab does to replay at any refresh rate.
+        case manual
+    }
+
+    /// Records every motion and gesture event to a file, or stops recording. The
+    /// orientation stream stays on while it records.
+    func setMotionLog(path: String?) {
+        if let path { MotionLog.shared.start(at: path) } else { MotionLog.shared.stop() }
+        updateMotionStreams()
+    }
+
+    /// One display frame, for `CursorFrames.manual`.
+    func cursorFrame() {
+        flushCursorMovement()
+    }
+
+    /// Posts this frame's share of the movement.
+    private func flushCursorMovement() {
+        let now = clock()
+        guard airCursorEnabled, canUseAirCursor, now - cursorLastOrientation <= 0.15 else { cursorPacer.clear(); return }
+        guard controls.trusted else { pause(); return }
+        guard let movement = airPointer.timedMovement() else { return }
+        // A pinch, Option, or the first frame drops what moved meanwhile, like lifting
+        // a mouse. The first frame after a hold drops the settling that came with it.
+        guard !cursorRepositioning, now >= cursorMotionResumesAt, !cursorNeedsAnchor else {
+            if !cursorRepositioning, now >= cursorMotionResumesAt { cursorNeedsAnchor = false }
+            cursorPacer.clear()
+            return
+        }
+        // Stillness and acceleration are already in the movement, sample by sample.
+        let scale = SIMD2(repeating: cursorSpeed)
+        guard let location = controls.cursorLocation else { return }
+        // The trackpad moved the pointer: where it is now is home.
+        if let last = cursorLastPosted, hypot(location.x - last.x, location.y - last.y) > 2 { pointerHome.reset() }
+        let pointer = SIMD2(Double(location.x), Double(location.y)) / scale
+        let arm = airPointer.aim.map { pointerReach.screenDegrees(SIMD2($0.azimuth, $0.elevation)) }
+        for step in movement {
+            var degrees = pointerReach.screenDegrees(step.step)
+            if let arm { degrees = pointerHome.adjust(degrees, pointer: pointer, arm: arm, strength: airPointer.tuning.recentering) }
+            cursorPacer.add(degrees * scale, at: step.time)
+        }
+        guard let delta = cursorPacer.take(at: now) else { return }
+        do {
+            let target = CGPoint(x: location.x + delta.x, y: location.y + delta.y)
+            if heldButton != nil { learned(.drag) }
+            let posted = try controls.moveCursor(to: target, dragging: heldButton?.button)
+            cursorLastPosted = posted
+            if let arm {
+                let postedDegrees = SIMD2(Double(posted.x), Double(posted.y)) / scale
+                if abs(posted.x - target.x) > 0.5 { pointerHome.rehome(axis: 0, pointer: postedDegrees, arm: arm) }
+                if abs(posted.y - target.y) > 0.5 { pointerHome.rehome(axis: 1, pointer: postedDegrees, arm: arm) }
+            }
+        } catch {
+            self.error = error.localizedDescription
+            pause()
+        }
+    }
+
+
     func selectHand(_ hand: BandHand) {
         guard canChangeHand, hand != bandHand else { return }
         pause()
@@ -597,6 +829,7 @@ final class BandModel: ObservableObject {
     }
 
     private func suspendActions() {
+        setAirCursorEnabled(false)
         gate.pause()
         resetDial()
         dialEngaged = false
@@ -617,6 +850,17 @@ final class BandModel: ObservableObject {
         } else { phase = "Preparing…" }
         live = false
         heartbeat = nil
+        airPointer.discard()
+        cursorNeedsAnchor = true
+        motionDelay.reset()
+        linkDelay = 0
+        linkDelayAt = -.infinity
+        linkLateSince = nil
+        linkOnTimeSince = nil
+        linkCongested = false
+        lastSensorAt = nil
+        sensorHealthySince = nil
+        sensorRecoveryPending = false
         handConfirmed = false
         pendingHand = nil
         handSettingError = nil
@@ -624,6 +868,7 @@ final class BandModel: ObservableObject {
         streamHint = nil
         charging = nil
         readings.reset()
+        motion.reset()
         rawEMGActive = false
         rawEMGChanging = false
         rawDisablePending = false
@@ -810,6 +1055,7 @@ final class BandModel: ObservableObject {
 
     private func receive(_ event: BandEvent) {
         let now = clock()
+        MotionLog.shared.record(event)
         switch event.payload {
         case .devices(let discovered):
             // Preserve the remembered band if it isn't advertising during this scan.
@@ -829,11 +1075,13 @@ final class BandModel: ObservableObject {
         case .handedness(let hand):
             guard wantsConnection, !sleeping else { return }
             bandHand = hand
+            loadPointerReach()
             defaults.set(hand.rawValue, forKey: "bandHand")
             handConfirmed = true
             pendingHand = nil
             handSettingError = nil
         case .handednessFailure(let message):
+            setAirCursorEnabled(false)
             handConfirmed = false
             pendingHand = nil
             handSettingError = message
@@ -865,7 +1113,7 @@ final class BandModel: ObservableObject {
         case .rawEMGFrame(let payload):
             guard wantsConnection, !sleeping else { return }
             readings.receive(payload, at: now)
-            markDataArrived()
+            markDataArrived(at: event.receivedAt)
             receivedInput()
             recordRawFrame(payload, at: now)
         case .rawEMGConfiguration(let configuration):
@@ -903,13 +1151,34 @@ final class BandModel: ObservableObject {
         case .heartbeat:
             if abs(now - event.receivedAt) < 0.6 { receivedInput() }
         case .dataSeen:
-            markDataArrived()
+            markDataArrived(at: event.receivedAt)
         case .gesture(let message):
             guard wantsConnection, !sleeping, now - message.receivedAt <= 0.35, now - message.receivedAt >= -0.1 else { return }
-            markDataArrived()
+            markDataArrived(at: message.receivedAt)
             receivedInput()
             guard pendingHand == nil else { return }
+            // Gestures share one pipe with motion, so they are exactly as late as the
+            // motion around them. A pinch from seconds ago must not click now.
+            if linkIsLate(at: now) {
+                if heldButton?.finger == message.finger { releaseHeldButton() }
+                // Forget this finger's pinch too: a dropped release would otherwise swallow the next press.
+                cursorPressedFingers.remove(message.finger)
+                if pinchedFinger == message.finger { pinchedFinger = nil }
+                connectionLog.notice("Dropped a \(message.finger, privacy: .public) \(message.action, privacy: .public) that arrived \(self.linkDelay, privacy: .public)s late")
+                return
+            }
+            if pointerCalibration != nil {
+                receiveCalibrationGesture(message, now: now)
+                return
+            }
             if let label = message.gestureLabel, lastGesture != label { lastGesture = label }
+            if airCursorEnabled {
+                guard !cursorRepositioning else { return }
+                if message.finger != "thumb" {
+                    receiveCursorGesture(message, now: now)
+                    return
+                }
+            }
             if !message.synthetic, ["index", "middle"].contains(message.finger) {
                 let finger = message.finger
                 let actions = [message.derivedAction, message.action]
@@ -920,6 +1189,7 @@ final class BandModel: ObservableObject {
                 }
             }
             guard let gesture = router.gesture(from: message, now: now) else { return }
+            if airCursorEnabled { steadyCursor(until: now + 0.12) }
             let action: MacAction
             switch gesture {
             case .swipe(let direction):
@@ -942,7 +1212,8 @@ final class BandModel: ObservableObject {
             }
             dispatch(action)
         case .dialState(let engaged):
-            guard live, pendingHand == nil, abs(now - event.receivedAt) <= 0.35 else { resetDial(); return }
+            guard !airCursorEnabled, pointerCalibration == nil else { return }
+            guard live, pendingHand == nil, abs(now - event.receivedAt) <= 0.35, !linkIsLate(at: now) else { resetDial(); return }
             // A pinch that turned has just ended: the release is not a tap.
             if !engaged && dialTurned { dialEndedAt = now }
             dialTurned = false
@@ -953,7 +1224,9 @@ final class BandModel: ObservableObject {
                 dialGate.arm(at: event.receivedAt)
             }
         case .dialTurn(let rotation):
+            guard !airCursorEnabled, pointerCalibration == nil else { return }
             guard live, handConfirmed, dialEngaged, abs(now - event.receivedAt) <= 0.35, rotation.isFinite else { return }
+            guard !linkIsLate(at: now) else { resetDial(); dialEngaged = false; return }
             // The same intended turn produced the opposite gyro sign on the left wrist.
             let delta = bandHand == .left ? -rotation : rotation
             dialTurned = true
@@ -966,25 +1239,54 @@ final class BandModel: ObservableObject {
             lastGesture = steps > 0 ? "Wrist turn +" : "Wrist turn −"
             lastDirection = nil
             dispatch(dialTarget.action(increasing: steps > 0), count: abs(steps))
+        case .orientation(let timestamp, let values):
+            guard let aim = ForearmAim(quaternion: values, axis: ForearmAim.forearmAxis(for: bandHand)) else { return }
+            let delay = measureLinkDelay(band: timestamp, host: event.receivedAt)
+            if developerMode { motion.receiveAim(aim, delay: delay, at: event.receivedAt) }
+            // A late sample is where the arm was, not where it is. Skipping it pauses
+            // the pointer, and the gap re-anchors it when fresh data returns.
+            guard delay <= Self.lateInput else { return }
+            recentAims.append((event.receivedAt, aim))
+            recentAims.removeAll { event.receivedAt - $0.time > 0.6 }
+            // The band's own clock says when it sampled: two samples share each radio batch.
+            if !airPointer.receive(aim, at: event.receivedAt - delay) { cursorNeedsAnchor = true }
+            if cursorPageVisible, event.receivedAt - cursorLiveAt.aim >= 0.05 {
+                cursorAim = aim
+                cursorLiveAt.aim = event.receivedAt
+            }
+            cursorLastOrientation = event.receivedAt
+        case .motionStreams:
+            break
+        case .gyro(let timestamp, let values):
+            let delay = measureLinkDelay(band: timestamp, host: event.receivedAt)
+            if delay <= Self.lateInput { airPointer.receiveGyro(values, at: event.receivedAt - delay) }
+            if cursorPageVisible {
+                calmArmSpeed += (airPointer.speed - calmArmSpeed) * (1 - exp(-(1.0 / 128) / 0.25))
+                if event.receivedAt - cursorLiveAt.armSpeed >= 0.05 {
+                    cursorArmSpeed = calmArmSpeed
+                    cursorLiveAt.armSpeed = event.receivedAt
+                }
+            }
+            if developerMode { motion.receiveGyro(values, at: event.receivedAt) }
         }
         maxDeliveryDelay = max(maxDeliveryDelay, now - event.receivedAt)
         evaluateStreamHint(at: now)
     }
 
-    /// The two hard prerequisites the captured sessions taught: wrist contact
-    /// and off the charger. Named once, ten seconds after an acknowledged
-    /// subscription has produced no sensor data. `subscribedAt` clears the
-    /// moment data frames arrive; heartbeats alone never clear it.
+    /// Status replies prove the link is alive, not that its sensors are flowing.
     private func evaluateStreamHint(at now: Double) {
-        guard busy, let subscribedAt, now - subscribedAt >= 10 else { return }
+        guard busy, !sensorRecoveryPending, let lastData = lastSensorAt ?? subscribedAt,
+              now - lastData >= 10 else { return }
         if streamHint == nil {
-            connectionLog.notice("Subscription acknowledged with no data frames for \(now - subscribedAt, privacy: .public)s")
+            connectionLog.notice("No sensor frames for \(now - lastData, privacy: .public)s; charging: \(String(describing: self.charging), privacy: .public)")
         }
-        streamHint = "subscribed but no data — is the band on your wrist and off the charger?"
+        streamHint = lastSensorAt == nil
+            ? "subscribed but no data — is the band on your wrist and off the charger?"
+            : "sensor stream is quiet — is the band on your wrist and off the charger?"
     }
 
     private func receivedInput() {
-        guard wantsConnection, !sleeping else { return }
+        guard wantsConnection, !sleeping, !sensorRecoveryPending else { return }
         let now = clock()
         if let heartbeat { maxInputGap = max(maxInputGap, now - heartbeat) }
         heartbeat = now
@@ -993,8 +1295,233 @@ final class BandModel: ObservableObject {
         if automaticStartPending && controls.trusted { toggleControls() }
     }
 
+    private func receiveCursorGesture(_ message: BandGesture, now: Double) {
+        guard canUseAirCursor, !message.synthetic, ["index", "middle"].contains(message.finger),
+              message.receivedAt >= cursorArmedAt, now - message.receivedAt <= 0.1 else { return }
+        let actions = [message.action, message.derivedAction]
+        if actions.contains(where: { ["release", "buttonRelease", "buttonHoldRelease"].contains($0) }) {
+            if cursorPressedFingers.remove(message.finger) != nil {
+                if airPointer.approach != .tracking { guardCursorClick(at: message.receivedAt - linkDelay) }
+                if heldButton?.finger == message.finger { releaseHeldButton() }
+            }
+            if pinchedFinger == message.finger { pinchedFinger = nil }
+            return
+        }
+        // One complete click at pinch onset. Ignore its hold, tap and double-tap
+        // reports, which describe the same contact and would otherwise click again.
+        guard actions.contains(where: { ["press", "buttonPress"].contains($0) }),
+              !actions.contains("buttonHold"), cursorPressedFingers.insert(message.finger).inserted else { return }
+        guard controls.trusted else { pause(); return }
+        // Held still or settling onto a target: absorb the drift that follows the pinch.
+        // Tracking something that moves: hold nothing back.
+        if airPointer.approach != .tracking { guardCursorClick(at: message.receivedAt - linkDelay) }
+        pinchedFinger = message.finger
+        let button: CGMouseButton = message.finger == "index" ? .left : .right
+        // One button at a time, like a trackpad.
+        if heldButton != nil { releaseHeldButton() }
+        // The press lands where the pointer is, so the pointer never jumps. Pressing where
+        // it was a moment before, or posting the movement still waiting all at once, both
+        // moved the pointer by 5 to 25 points at the press, and people saw it snap.
+        let point = controls.cursorLocation
+        var clicks = 1
+        if let lastPress, let point, lastPress.button == button, now - lastPress.time <= Self.doubleClickTime,
+           hypot(point.x - lastPress.point.x, point.y - lastPress.point.y) <= Self.doubleClickDistance {
+            clicks = min(3, lastPress.clicks + 1)
+        }
+        do {
+            try controls.mouseButton(button, down: true, clicks: clicks, at: point)
+            heldButton = (button, message.finger, clicks)
+            learned(button == .right ? .rightClick : clicks > 1 ? .doubleClick : .click)
+            if let point { lastPress = (now, point, button, clicks) }
+            lastAction = button == .left ? (clicks > 1 ? "Double click" : "Left click") : "Right click"
+            recognizedGesture = .tap(message.finger == "index" ? .indexTap : .middleTap)
+            gestureCount += 1
+            totalGestureCount += 1
+            defaults.set(totalGestureCount, forKey: "totalGestureCount")
+        } catch {
+            self.error = error.localizedDescription
+            pause()
+        }
+    }
+
+    /// Absorbs the drift after a pinch or a release: movement still waiting is dropped
+    /// with it, as it would carry the pointer on past the click.
+    private func guardCursorClick(at time: Double) {
+        airPointer.guardClick(at: time)
+        cursorPacer.clear()
+    }
+
+    /// Lets go of a button a pinch holds. Never leaves one stuck down: this runs when
+    /// the pinch ends, when the cursor turns off, and when the link falls behind.
+    private func releaseHeldButton() {
+        guard let held = heldButton else { return }
+        heldButton = nil
+        do { try controls.mouseButton(held.button, down: false, clicks: held.clicks, at: nil) }
+        catch { self.error = error.localizedDescription }
+    }
+
+    /// Measures one motion sample's delay, and tracks whether the link is congested:
+    /// late for a second running, and clear again after two seconds on time.
+    private func measureLinkDelay(band timestamp: UInt64, host: Double) -> Double {
+        let delay = motionDelay.measure(band: Double(timestamp) / 1e6, host: host)
+        linkDelay = delay
+        linkDelayAt = host
+        if delay > Self.lateInput {
+            linkOnTimeSince = nil
+            let since = linkLateSince ?? host
+            linkLateSince = since
+            if host - since >= 1 {
+                if !linkCongested {
+                    linkCongested = true
+                    releaseHeldButton()
+                    connectionLog.notice("Band data is arriving \(delay, privacy: .public)s late; the radio link is congested")
+                }
+                // Turning the motion streams off and on may clear the band's backlog. It has
+                // not yet been seen to help, so it is cheap: once every 20 s while data is late.
+                if host - lastMotionRestart >= 20 {
+                    lastMotionRestart = host
+                    connection.restartMotionStreams()
+                }
+            }
+        } else {
+            linkLateSince = nil
+            let since = linkOnTimeSince ?? host
+            linkOnTimeSince = since
+            if linkCongested, host - since >= 2 {
+                linkCongested = false
+                connectionLog.notice("Band data is on time again")
+            }
+        }
+        return delay
+    }
+
+    /// True when the latest motion showed a late link. Without recent motion the delay is unknown, so not late.
+    private func linkIsLate(at now: Double) -> Bool {
+        now - linkDelayAt <= 0.5 && linkDelay > Self.lateInput
+    }
+
+    // MARK: - motion streams
+
+    /// Orientation is half of the link's load, and only the air cursor, its
+    /// calibration, and the readings page use it. The gyro stays on for the dial.
+    var wantedMotionStreams: MotionStreams {
+        MotionStreams(gyro: true, orientation: airCursorEnabled || pointerCalibration != nil || readingsVisible
+                          || cursorPageVisible || MotionLog.shared.isOn)
+    }
+
+    private func updateMotionStreams() {
+        connection.setMotionStreams(wantedMotionStreams)
+    }
+
+    func setReadingsVisible(_ visible: Bool) {
+        readingsVisible = visible
+    }
+
+    /// Puts speed, flick boost, and steadiness back to their defaults. Calibration's slant stays.
+    func resetCursorLevers() {
+        cursorSpeed = PointerReach.standardSpeed
+        cursorFlickBoost = PointerAcceleration.fastFactor
+        cursorSteadiness = Self.standardSteadiness
+    }
+
+    func setCursorPageVisible(_ visible: Bool) {
+        cursorPageVisible = visible
+        if visible { cursorSkills = [] } else { cursorAim = nil }
+    }
+
+    private func learned(_ skill: CursorSkill) {
+        if cursorPageVisible, !cursorSkills.contains(skill) { cursorSkills.insert(skill) }
+    }
+
+    // MARK: - pointer calibration
+
+    private var pointerReachKey: String { "pointerReach.\(selectedAddress).\(bandHand.rawValue)" }
+
+    private func loadPointerReach() {
+        let saved = defaults.data(forKey: pointerReachKey).flatMap { try? JSONDecoder().decode(PointerReach.self, from: $0) }
+        pointerReach = saved.flatMap { $0.isValid ? $0 : nil } ?? .standard(for: bandHand)
+        pointerCalibrated = saved?.isValid == true
+    }
+
+    /// Shows the three targets. Pinches aim at them instead of clicking until it ends.
+    func beginPointerCalibration() {
+        guard canUseAirCursor else { return }
+        setAirCursorEnabled(false)
+        pointerCalibrationProblem = nil
+        calibrationPinchDown = pinchedFinger != nil
+        resetDial()
+        dialEngaged = false
+        pointerCalibration = PointerCalibration()
+        lastAction = "Calibrating the air cursor · Escape to stop"
+    }
+
+    func cancelPointerCalibration() {
+        guard pointerCalibration != nil else { return }
+        pointerCalibration = nil
+        lastAction = "Calibration cancelled"
+    }
+
+    /// Forgets this band's calibration: the standard slant, and the standard speed it set.
+    func resetPointerReach() {
+        defaults.removeObject(forKey: pointerReachKey)
+        loadPointerReach()
+        cursorSpeed = PointerReach.standardSpeed
+    }
+
+    private func receiveCalibrationGesture(_ message: BandGesture, now: Double) {
+        guard !message.synthetic, message.finger == "index" else { return }
+        let actions = [message.action, message.derivedAction]
+        if actions.contains(where: { ["release", "buttonRelease", "buttonHoldRelease"].contains($0) }) {
+            calibrationPinchDown = false
+            return
+        }
+        guard actions.contains(where: { ["press", "buttonPress"].contains($0) }), !calibrationPinchDown else { return }
+        calibrationPinchDown = true
+        // The aim a moment before the pinch: the pinch itself nudges the forearm.
+        let window = recentAims.filter { (0.1...0.3).contains(message.receivedAt - $0.time) }
+        guard !window.isEmpty, now - (recentAims.last?.time ?? -.infinity) <= 0.3 else {
+            pointerCalibrationProblem = "no fresh motion from the band. keep it close, then pinch again."
+            return
+        }
+        // Average the compass angle around the first sample, so the seam at ±180° can't split it.
+        let first = window[0].aim.azimuth
+        let azimuth = first + window.map { remainder($0.aim.azimuth - first, 360) }.reduce(0, +) / Double(window.count)
+        let elevation = window.map(\.aim.elevation).reduce(0, +) / Double(window.count)
+        guard var calibration = pointerCalibration else { return }
+        let reach = calibration.record(ForearmAim(azimuth: azimuth, elevation: elevation))
+        pointerCalibrationProblem = calibration.problem
+        if let reach {
+            pointerCalibration = nil
+            pointerReach = reach
+            // The reach was measured across this display: it sets the speed too.
+            cursorSpeed = min(PointerReach.speeds.upperBound, max(PointerReach.speeds.lowerBound,
+                                                                    Double(controls.displaySize.width) / reach.degreesAcrossWidth))
+            pointerCalibrated = true
+            if let data = try? JSONEncoder().encode(reach) { defaults.set(data, forKey: pointerReachKey) }
+            lastAction = String(format: "Air cursor calibrated: %.0f° across, %.0f° up and down", reach.degreesAcrossWidth, reach.degreesAcrossHeight)
+            connectionLog.notice("Pointer calibrated: \(reach.degreesAcrossWidth, privacy: .public)° across, \(reach.degreesAcrossHeight, privacy: .public)° up and down, up tilt \(reach.upTilt, privacy: .public), across tilt \(reach.acrossTilt, privacy: .public)")
+        } else {
+            pointerCalibration = calibration
+        }
+    }
+
+    private func steadyCursor(until time: Double) {
+        // Hold the pointer still through a pinch, and drop what the pinch's twitch moved.
+        cursorMotionResumesAt = max(cursorMotionResumesAt, time)
+        cursorNeedsAnchor = true
+    }
+
     /// Sensor frames are flowing, so the no-data hint no longer applies.
-    private func markDataArrived() {
+    private func markDataArrived(at time: Double) {
+        guard wantsConnection, !sleeping, !sensorRecoveryPending, abs(clock() - time) < 0.6,
+              time >= (lastSensorAt ?? time) else { return }
+        if lastSensorAt.map({ time - $0 > 1 }) ?? true {
+            sensorHealthySince = time
+        }
+        lastSensorAt = time
+        // A brief burst after reconnecting is not a recovered stream. Require
+        // sustained data before allowing another automatic sensor recovery.
+        if let sensorHealthySince, time - sensorHealthySince >= 30 { sensorRecoveryUsed = false }
         subscribedAt = nil
         streamHint = nil
     }
@@ -1139,15 +1666,28 @@ final class BandModel: ObservableObject {
         }
         evaluateStreamHint(at: now)
         guard wantsConnection, busy, !sleeping else { return }
-        let silentFor = clock() - (heartbeat ?? started)
-        if silentFor > (heartbeat == nil ? 50 : 8) {
-            if live {
-                live = false
-                suspendActions()
-                phase = "Connection stalled. Reconnecting…"
-                connectionLog.notice("No band input for \(silentFor, privacy: .public)s; reconnecting")
+        // One watchdog, and at most one stop per recovery. The link is dead when
+        // nothing at all arrives. Sensors are stalled when status replies still
+        // arrive but motion does not; that recovery is budgeted, because an
+        // off-wrist band legitimately goes quiet and must not reconnect forever.
+        if !sensorRecoveryPending {
+            let linkSilence = now - (heartbeat ?? started)
+            let linkDead = linkSilence > (heartbeat == nil ? 50 : 8)
+            var sensorsStalled = false
+            if case .connect = activeOperation, !sensorRecoveryUsed, charging != true, let lastSensorAt {
+                sensorsStalled = now - lastSensorAt > 10
             }
-            connection.stop()
+            if linkDead || sensorsStalled {
+                if !linkDead { sensorRecoveryUsed = true }
+                sensorRecoveryPending = true
+                if live {
+                    live = false
+                    suspendActions()
+                }
+                phase = "Reconnecting…"
+                connectionLog.notice("\(linkDead ? "No band input" : "No sensor frames", privacy: .public) for \(linkDead ? linkSilence : now - (self.lastSensorAt ?? now), privacy: .public)s; reconnecting once")
+                connection.stop()
+            }
         }
         if clock() - metricsAt >= 10 {
             connectionLog.info("Input gap max \(self.maxInputGap, privacy: .public)s; delivery delay max \(self.maxDeliveryDelay, privacy: .public)s")

@@ -43,7 +43,10 @@ struct ReadingsPage: View {
                 Text("records the original sensor payloads as JSONL. values are ADC counts, not calibrated voltage.")
                     .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
             }
+            MotionReadingsView(motion: model.motion, live: model.live).padding(.top, 10).reveal(4)
         }
+        .onAppear { model.setReadingsVisible(true) }
+        .onDisappear { model.setReadingsVisible(false) }
     }
 
     private func chooseCaptureFile() {

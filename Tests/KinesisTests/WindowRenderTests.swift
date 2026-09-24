@@ -31,6 +31,10 @@ private struct AllowedControls: MacControls {
     var trusted = true
     func requestAccess() {}
     func post(_ action: MacAction) throws {}
+    var cursorLocation: CGPoint? { .zero }
+    var displaySize: CGSize { CGSize(width: 1600, height: 1000) }
+    func moveCursor(to point: CGPoint, dragging button: CGMouseButton?) throws -> CGPoint { point }
+    func mouseButton(_ button: CGMouseButton, down: Bool, clicks: Int, at point: CGPoint?) throws {}
 }
 
 @MainActor private final class NoSession: MetaSessionStoring {
@@ -125,6 +129,7 @@ private struct AllowedControls: MacControls {
 
     let smallest = CGSize(width: 920, height: 660)
     let edges: [(String, AnyView)] = [
+        ("cursor-ready", AnyView(MainView(model: try readings(active: false), page: .cursor, scrolls: false))),
         ("readings-empty", AnyView(MainView(model: try readings(active: false), page: .readings, scrolls: false))),
         ("readings-synthetic-live", AnyView(MainView(model: try readings(active: true), page: .readings, scrolls: false))),
         ("edge-strained-overview", AnyView(MainView(model: try strained(), scrolls: false))),

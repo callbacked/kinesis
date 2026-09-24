@@ -1,5 +1,5 @@
-# kinesis 0.3.0
+# kinesis 0.4.0
 
-now shows raw sEMG readings and lets you record the stream. turn on developer mode at the bottom of band settings to unlock the readings tab. (may drain your battery more?)
+adds an experimental air cursor. move your arm to move the mouse. pinch your index to left click, hold the pinch to drag, and pinch your middle finger to right click. you can find it in developer mode.
 
-adds charging status.
+the readings screen now shows gyro readings along with the semg outputs.

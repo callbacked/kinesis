@@ -3,7 +3,7 @@ import SwiftUI
 /// What the band column's one button does next. It always offers the step that
 /// moves the band toward useful: pair it, connect it, then hand it the Mac.
 enum BandAction: Equatable {
-    case pair, pairing, connect, connecting, enableControls, pauseControls
+    case pair, pairing, connect, connecting, disconnecting, enableControls, pauseControls
 
     var title: String {
         switch self {
@@ -11,6 +11,7 @@ enum BandAction: Equatable {
         case .pairing: "pairing…"
         case .connect: "connect"
         case .connecting: "connecting…"
+        case .disconnecting: "disconnecting…"
         case .enableControls: "enable controls"
         case .pauseControls: "pause controls"
         }
@@ -22,11 +23,11 @@ enum BandAction: Equatable {
         case .connect: "arrow.right"
         case .enableControls: "play.fill"
         case .pauseControls: "pause.fill"
-        case .pairing, .connecting: nil
+        case .pairing, .connecting, .disconnecting: nil
         }
     }
 
-    var waits: Bool { self == .pairing || self == .connecting }
+    var waits: Bool { self == .pairing || self == .connecting || self == .disconnecting }
 }
 
 extension BandModel {
@@ -34,6 +35,8 @@ extension BandModel {
         if pairInProgress || enrollmentStage != .idle { return .pairing }
         if showsPairAction { return .pair }
         if live { return controlsEnabled ? .pauseControls : .enableControls }
+        // Winding down after a disconnect is not connecting.
+        if busy && !wantsConnection { return .disconnecting }
         if wantsConnection || busy { return .connecting }
         return .connect
     }
@@ -57,6 +60,11 @@ struct BandPane: View {
             HStack(spacing: 9) {
                 KinesisMark(size: CGSize(width: 25, height: 23))
                 Text("kinesis").font(.system(size: 16, weight: .medium, design: .rounded)).tracking(-0.5)
+                #if KINESIS_DEV
+                Text("dev").font(KinesisType.micro).foregroundStyle(KinesisStyle.accent)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Capsule().fill(KinesisStyle.accent.opacity(0.14)))
+                #endif
                 Spacer()
             }.foregroundStyle(KinesisStyle.ink.opacity(0.9)).padding(.top, 46)
 
@@ -127,6 +135,7 @@ struct BandPane: View {
         return noticeContent
             .animation(reduceMotion ? nil : KinesisMotion.enter, value: model.awaitingSystemPairing)
             .animation(reduceMotion ? nil : KinesisMotion.enter, value: lowBattery)
+            .animation(reduceMotion ? nil : KinesisMotion.enter, value: model.linkCongested)
     }
 
     @ViewBuilder private var noticeContent: some View {
@@ -134,6 +143,8 @@ struct BandPane: View {
             PaneNotice(symbol: "hand.tap", text: "accept the bluetooth request", tint: KinesisStyle.accent)
         } else if let hint = model.streamHint {
             PaneNotice(symbol: "questionmark.circle", text: hint, tint: KinesisStyle.warning)
+        } else if model.live && model.linkCongested {
+            PaneNotice(symbol: "antenna.radiowaves.left.and.right.slash", text: "weak signal · data arrives late", tint: KinesisStyle.warning)
         } else if model.live, let battery = model.battery, battery <= 15 {
             PaneNotice(symbol: "bolt.fill", text: "low battery", tint: KinesisStyle.warning)
         } else {
@@ -163,9 +174,10 @@ struct BandPane: View {
                 if model.pairInProgress { model.cancelPairing() } else { model.disconnect() }
             }
             .buttonStyle(.plain).font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
-            .opacity(model.live || action.waits ? 1 : 0)
-            .disabled(!(model.live || action.waits))
-            .accessibilityHidden(!(model.live || action.waits))
+            // Nothing to cancel while the band is already letting go.
+            .opacity(model.live || (action.waits && action != .disconnecting) ? 1 : 0)
+            .disabled(!(model.live || (action.waits && action != .disconnecting)))
+            .accessibilityHidden(!(model.live || (action.waits && action != .disconnecting)))
         }
     }
 
@@ -176,7 +188,7 @@ struct BandPane: View {
             model.pairBand()
         case .connect: model.connect()
         case .enableControls, .pauseControls: model.toggleControls()
-        case .pairing, .connecting: break
+        case .pairing, .connecting, .disconnecting: break
         }
     }
 
