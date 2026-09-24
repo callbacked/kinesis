@@ -107,6 +107,8 @@ struct AirPointer {
     private var lastGyroTime: Double?
     /// Degrees per second the aim is turning, from the gyro, without wrist twist.
     private(set) var speed = 0.0
+    /// The same turn as a direction: the gyro's two axes other than the forearm, smoothed alike.
+    private(set) var turn = SIMD2<Double>.zero
     /// The last 200 ms of speed, to tell settling onto a target from tracking one.
     private var recentSpeeds: [(time: Double, speed: Double)] = []
 
@@ -135,7 +137,9 @@ struct AirPointer {
     /// percentile, and slow, careful moves ran 1.2 to 1.8°/s typically. The orientation
     /// alone can't separate the two (1.7 against 1.8°/s), and a positional dead zone
     /// gave slow moves backlash: they felt like an arm that was asleep.
-    var still: ClosedRange<Double> {
+    var still: ClosedRange<Double> { Self.still(steadiness: steadiness) }
+
+    static func still(steadiness: Double) -> ClosedRange<Double> {
         let low = 0.5 + 0.7 * max(0, min(1, steadiness))
         return low...(low + 0.5)
     }
@@ -214,6 +218,7 @@ struct AirPointer {
         // Body +y is the forearm, so a rate around y is a twist, which never moves the pointer.
         let rate = (corrected.x * corrected.x + corrected.z * corrected.z).squareRoot()
         speed += (rate - speed) * (1 - exp(-dt / 0.1))
+        turn += (SIMD2(corrected.x, corrected.z) - turn) * (1 - exp(-dt / 0.1))
         accelerationSpeed += (rate - accelerationSpeed) * (1 - exp(-dt / tuning.accelerationSeconds))
         gateSpeed = max(speed, gateSpeed * exp(-dt / 0.15))
         recentSpeeds.append((time, speed))
@@ -388,6 +393,7 @@ enum PointerAcceleration {
     static let fastSpeed = 30.0
     static let slowFactor = 0.6
     static let fastFactor = 1.6
+    static let flickBoosts = 1.0...2.5
 
     /// The multiplier on the calibrated scale at this speed in degrees per second.
     static func factor(speed: Double, fast: Double = fastFactor) -> Double {
@@ -489,9 +495,14 @@ struct PointerReach: Codable, Equatable {
         return SIMD2(right, -up)
     }
 
-    func pointsPerDegree(display: CGSize, sensitivity: Double) -> SIMD2<Double> {
-        SIMD2(display.width / degreesAcrossWidth, display.height / degreesAcrossHeight) * sensitivity
-    }
+    /// Points the pointer moves per degree of arm turn before acceleration, the same
+    /// on every display, like a mouse. A scale per display made one arm move go 2.3
+    /// times further on a 3440-point ultrawide than on a 1512-point laptop screen,
+    /// although a button is the same size in points on both. On the ultrawide, the
+    /// practice lab runs that scored best on 2026-09-24 moved 42 to 46 points a
+    /// degree, across and up and down alike: 75° crosses that display, 33° a laptop's.
+    static let standardSpeed = 45.0
+    static let speeds = 20.0...100.0
 }
 
 /// Four targets on the main display: left, right, top, and bottom of the center. The

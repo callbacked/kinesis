@@ -100,8 +100,29 @@ final class BandModel: ObservableObject {
         didSet { if readingsVisible != oldValue { updateMotionStreams() } }
     }
     @Published private(set) var cursorRepositioning = false
-    @Published var cursorSensitivity = 1.0 {
-        didSet { defaults.set(cursorSensitivity, forKey: "pointerSensitivity") }
+    /// The cursor page is open. It shows the arm live, so it needs orientation too.
+    @Published private(set) var cursorPageVisible = false {
+        didSet { if cursorPageVisible != oldValue { updateMotionStreams() } }
+    }
+    /// While the cursor page is open, 20 times a second: how the arm is turning, in
+    /// degrees a second, with the length the stillness gate judges.
+    @Published private(set) var cursorWobble = SIMD2<Double>.zero
+    /// While the cursor page is open, 20 times a second: where the forearm points.
+    @Published private(set) var cursorAim: ForearmAim?
+    private var cursorLiveAt = (wobble: -Double.infinity, aim: -Double.infinity)
+    /// Pointer actions tried since the cursor page opened, so it can show them done.
+    @Published private(set) var cursorSkills: Set<CursorSkill> = []
+    enum CursorSkill: CaseIterable { case click, rightClick, doubleClick, drag }
+    /// Points the pointer moves per degree of arm turn, before acceleration.
+    @Published var cursorSpeed = PointerReach.standardSpeed {
+        didSet { defaults.set(cursorSpeed, forKey: "pointerSpeed") }
+    }
+    /// How much quick moves speed up: the top acceleration factor.
+    @Published var cursorFlickBoost = PointerAcceleration.fastFactor {
+        didSet {
+            defaults.set(cursorFlickBoost, forKey: "pointerFlickBoost")
+            airPointer.tuning.fastFactor = cursorFlickBoost
+        }
     }
     @Published var cursorSteadiness = 0.5 {
         didSet {
@@ -341,8 +362,21 @@ final class BandModel: ObservableObject {
         hasSavedMetaSession = sessionStore.hasSavedSession()
         startsAutomatically = defaults.bool(forKey: "startsAutomatically")
         developerMode = defaults.bool(forKey: "developerMode")
-        let cursorSensitivity = defaults.double(forKey: "pointerSensitivity")
-        if (0.25...4).contains(cursorSensitivity) { self.cursorSensitivity = cursorSensitivity }
+        let speed = defaults.double(forKey: "pointerSpeed")
+        if PointerReach.speeds.contains(speed) {
+            cursorSpeed = speed
+        } else {
+            // Before speed, a sensitivity multiplied a scale per display.
+            let sensitivity = defaults.double(forKey: "pointerSensitivity")
+            if (0.25...4).contains(sensitivity) {
+                cursorSpeed = min(PointerReach.speeds.upperBound, max(PointerReach.speeds.lowerBound, PointerReach.standardSpeed * sensitivity))
+            }
+        }
+        let boost = defaults.double(forKey: "pointerFlickBoost")
+        if PointerAcceleration.flickBoosts.contains(boost) {
+            cursorFlickBoost = boost
+            airPointer.tuning.fastFactor = boost
+        }
         if defaults.object(forKey: "pointerStillness") != nil {
             let steadiness = defaults.double(forKey: "pointerStillness")
             if (0...1).contains(steadiness) { cursorSteadiness = steadiness }
@@ -719,7 +753,7 @@ final class BandModel: ObservableObject {
             return
         }
         // Stillness and acceleration are already in the movement, sample by sample.
-        let scale = pointerReach.pointsPerDegree(display: controls.displaySize, sensitivity: cursorSensitivity)
+        let scale = SIMD2(repeating: cursorSpeed)
         guard let location = controls.cursorLocation else { return }
         // The trackpad moved the pointer: where it is now is home.
         if let last = cursorLastPosted, hypot(location.x - last.x, location.y - last.y) > 2 { pointerHome.reset() }
@@ -733,6 +767,7 @@ final class BandModel: ObservableObject {
         guard let delta = cursorPacer.take(at: now) else { return }
         do {
             let target = CGPoint(x: location.x + delta.x, y: location.y + delta.y)
+            if heldButton != nil { learned(.drag) }
             let posted = try controls.moveCursor(to: target, dragging: heldButton?.button)
             cursorLastPosted = posted
             if let arm {
@@ -1207,12 +1242,22 @@ final class BandModel: ObservableObject {
             recentAims.removeAll { event.receivedAt - $0.time > 0.6 }
             // The band's own clock says when it sampled: two samples share each radio batch.
             if !airPointer.receive(aim, at: event.receivedAt - delay) { cursorNeedsAnchor = true }
+            if cursorPageVisible, event.receivedAt - cursorLiveAt.aim >= 0.05 {
+                cursorAim = aim
+                cursorLiveAt.aim = event.receivedAt
+            }
             cursorLastOrientation = event.receivedAt
         case .motionStreams:
             break
         case .gyro(let timestamp, let values):
             let delay = measureLinkDelay(band: timestamp, host: event.receivedAt)
             if delay <= Self.lateInput { airPointer.receiveGyro(values, at: event.receivedAt - delay) }
+            if cursorPageVisible, event.receivedAt - cursorLiveAt.wobble >= 0.05 {
+                let turn = airPointer.turn
+                let length = (turn.x * turn.x + turn.y * turn.y).squareRoot()
+                cursorWobble = length > 0 ? turn / length * airPointer.speed : .zero
+                cursorLiveAt.wobble = event.receivedAt
+            }
             if developerMode { motion.receiveGyro(values, at: event.receivedAt) }
         }
         maxDeliveryDelay = max(maxDeliveryDelay, now - event.receivedAt)
@@ -1277,6 +1322,7 @@ final class BandModel: ObservableObject {
         do {
             try controls.mouseButton(button, down: true, clicks: clicks, at: point)
             heldButton = (button, message.finger, clicks)
+            learned(button == .right ? .rightClick : clicks > 1 ? .doubleClick : .click)
             if let point { lastPress = (now, point, button, clicks) }
             lastAction = button == .left ? (clicks > 1 ? "Double click" : "Left click") : "Right click"
             recognizedGesture = .tap(message.finger == "index" ? .indexTap : .middleTap)
@@ -1347,7 +1393,8 @@ final class BandModel: ObservableObject {
     /// Orientation is half of the link's load, and only the air cursor, its
     /// calibration, and the readings page use it. The gyro stays on for the dial.
     var wantedMotionStreams: MotionStreams {
-        MotionStreams(gyro: true, orientation: airCursorEnabled || pointerCalibration != nil || readingsVisible || MotionLog.shared.isOn)
+        MotionStreams(gyro: true, orientation: airCursorEnabled || pointerCalibration != nil || readingsVisible
+                          || cursorPageVisible || MotionLog.shared.isOn)
     }
 
     private func updateMotionStreams() {
@@ -1356,6 +1403,15 @@ final class BandModel: ObservableObject {
 
     func setReadingsVisible(_ visible: Bool) {
         readingsVisible = visible
+    }
+
+    func setCursorPageVisible(_ visible: Bool) {
+        cursorPageVisible = visible
+        if visible { cursorSkills = [] } else { cursorAim = nil }
+    }
+
+    private func learned(_ skill: CursorSkill) {
+        if cursorPageVisible, !cursorSkills.contains(skill) { cursorSkills.insert(skill) }
     }
 
     // MARK: - pointer calibration
@@ -1417,6 +1473,9 @@ final class BandModel: ObservableObject {
         if let reach {
             pointerCalibration = nil
             pointerReach = reach
+            // The reach was measured across this display: it sets the speed too.
+            cursorSpeed = min(PointerReach.speeds.upperBound, max(PointerReach.speeds.lowerBound,
+                                                                    Double(controls.displaySize.width) / reach.degreesAcrossWidth))
             pointerCalibrated = true
             if let data = try? JSONEncoder().encode(reach) { defaults.set(data, forKey: pointerReachKey) }
             lastAction = String(format: "Air cursor calibrated: %.0f° across, %.0f° up and down", reach.degreesAcrossWidth, reach.degreesAcrossHeight)

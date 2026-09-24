@@ -286,7 +286,8 @@ import KinesisCore
     init(hand: BandHand = .right) {
         let defaults = MemoryDefaults()
         defaults.set(true, forKey: "setupCompleted")
-        // 40° across a 1600-point display and 25° down a 1000-point one: 40 points a degree both ways.
+        // 40 points a degree both ways, and no slant.
+        defaults.set(40.0, forKey: "pointerSpeed")
         defaults.set(try? JSONEncoder().encode(PointerReach(degreesAcrossWidth: 40, degreesAcrossHeight: 25)),
                      forKey: "pointerReach.cursor-test-band.right")
         let clock = clock
@@ -603,6 +604,8 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     // 28° between left and right is 70 % of the width: 40° across. 14° is 70 % of 20° up and down.
     #expect(model.pointerCalibration == nil && model.pointerCalibrated)
     #expect(abs(model.pointerReach.degreesAcrossWidth - 40) < 0.5 && abs(model.pointerReach.degreesAcrossHeight - 20) < 0.5)
+    // Measured across this 1600-point display, 40° sets 40 points a degree.
+    #expect(abs(model.cursorSpeed - 40) < 0.5)
     #expect(rig.controls.clicks.isEmpty && rig.controls.cursorMoves.isEmpty && rig.controls.actions.isEmpty)
     // Escape stops a calibration the same way it stops the cursor.
     model.beginPointerCalibration()
@@ -1897,4 +1900,48 @@ private struct FakePairClient: BandPairClient {
     #expect(!model.rawEMGEnabled && !connection.rawEMGMode)
     #expect(model.developerMode && !model.rawEMGActive)
     await model.shutdown()
+}
+
+@Test @MainActor func theCursorPageLightsUpEachPointerActionOnceDone() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    try await rig.aim(0)
+    model.setAirCursorEnabled(true)
+    try await rig.aim(0)
+    // With the page closed, nothing is tracked.
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    #expect(model.cursorSkills.isEmpty)
+    model.setCursorPageVisible(true)
+    #expect(model.wantedMotionStreams.orientation)
+    rig.gesture("middle", "press")
+    rig.gesture("middle", "release")
+    rig.gesture("index", "press")
+    try await rig.sweep(to: 3, from: (0, 0), seconds: 0.4, settle: 0.2)
+    rig.gesture("index", "release")
+    #expect(model.cursorSkills == [.rightClick, .click, .drag])
+    // Two presses in place are a double-click.
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    #expect(model.cursorSkills.contains(.doubleClick))
+    // Opening the page again starts over.
+    model.setCursorPageVisible(false)
+    model.setCursorPageVisible(true)
+    #expect(model.cursorSkills.isEmpty)
+    await model.shutdown()
+}
+
+@Test @MainActor func speedIsTheSameOnEveryDisplayAndCarriesOverFromSensitivity() {
+    let defaults = MemoryDefaults()
+    defaults.set(2.0, forKey: "pointerSensitivity")
+    defaults.set(2.2, forKey: "pointerFlickBoost")
+    let model = BandModel(defaults: defaults, connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
+    #expect(model.cursorSpeed == PointerReach.standardSpeed * 2)
+    #expect(model.cursorFlickBoost == 2.2 && model.airPointer.tuning.fastFactor == 2.2)
+    model.cursorFlickBoost = 1.2
+    #expect(model.airPointer.tuning.fastFactor == 1.2)
+    let fresh = BandModel(defaults: MemoryDefaults(), connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
+    #expect(fresh.cursorSpeed == PointerReach.standardSpeed && fresh.cursorFlickBoost == PointerAcceleration.fastFactor)
 }

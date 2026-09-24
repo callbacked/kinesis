@@ -173,7 +173,9 @@ struct PracticeRandom {
         var medianError: Double?
         /// Straight distance over the pointer's path: 1 is a perfectly straight move.
         var medianStraightness: Double?
-        var sensitivity: Double
+        /// Points per degree of arm turn, and the top acceleration factor.
+        var speed: Double
+        var flickBoost: Double
         var steadiness: Double
         var hand: String
         var reach: PointerReach
@@ -400,7 +402,7 @@ struct PracticeRandom {
             medianSeconds: median(trials.filter(\.hit).map(\.seconds)),
             medianError: median(trials.compactMap(\.error)),
             medianStraightness: median(trials.filter { $0.hit && $0.pathLength > 0 }.map { min(1, $0.distance / $0.pathLength) }),
-            sensitivity: model.cursorSensitivity, steadiness: model.cursorSteadiness, hand: "\(model.bandHand)",
+            speed: model.cursorSpeed, flickBoost: model.cursorFlickBoost, steadiness: model.cursorSteadiness, hand: "\(model.bandHand)",
             reach: model.pointerReach, calibrated: model.pointerCalibrated, display: bounds,
             refreshRate: NSScreen.main?.maximumFramesPerSecond ?? 0)
         self.summary = summary

@@ -49,7 +49,7 @@ private let environment = ProcessInfo.processInfo.environment
         let summary = URL(fileURLWithPath: input).deletingLastPathComponent().appendingPathComponent("summary.json")
         if let data = try? Data(contentsOf: summary), let run = try? JSONDecoder().decode(LabSettings.self, from: data) {
             settings = run
-            print("using the run's settings: \(Int(run.display.width))x\(Int(run.display.height)), reach \(Int(run.reach?.degreesAcrossWidth ?? 0))° across, sensitivity \(run.sensitivity ?? 1)")
+            print("using the run's settings: \(Int(run.display.width))x\(Int(run.display.height)), \(Int(run.pointsPerDegree ?? PointerReach.standardSpeed)) points a degree")
         }
     }
     let recordings: [(name: String, events: [LabEvent])] = input == "scenarios"
@@ -86,8 +86,18 @@ private let environment = ProcessInfo.processInfo.environment
 struct LabSettings: Decodable {
     var display: CGSize
     var reach: PointerReach?
+    var speed: Double?
+    var flickBoost: Double?
+    /// Runs before speed had a sensitivity on a scale per display.
     var sensitivity: Double?
     var steadiness: Double?
+
+    /// Points per degree for this run.
+    var pointsPerDegree: Double? {
+        if let speed { return speed }
+        guard let reach else { return nil }
+        return Double(display.width) / reach.degreesAcrossWidth * (sensitivity ?? 1)
+    }
 
     init(display: CGSize) {
         self.display = display
@@ -282,10 +292,11 @@ struct LabRun {
         connection.send(.heartbeat, at: clock.now)
         connection.send(.handedness(.right), at: clock.now)
         model.toggleControls()
-        if let sensitivity = settings.sensitivity { model.cursorSensitivity = sensitivity }
+        if let speed = settings.pointsPerDegree { model.cursorSpeed = speed }
+        if let boost = settings.flickBoost { model.cursorFlickBoost = boost }
         if let steadiness = settings.steadiness { model.cursorSteadiness = steadiness }
         let reach = model.pointerReach
-        let scale = reach.pointsPerDegree(display: settings.display, sensitivity: model.cursorSensitivity)
+        let scale = SIMD2(repeating: model.cursorSpeed)
 
         var random = SplitMix(seed: 11)
         func frameLength() -> Double {

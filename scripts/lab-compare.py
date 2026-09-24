@@ -45,6 +45,15 @@ def screen_degrees(reach, azimuth, elevation):
     return right, -up
 
 
+def speed_of(summary):
+    """Points per degree of arm turn. Early runs scaled the reach to the display instead."""
+    if "speed" in summary:
+        return summary["speed"]
+    if "reach" in summary and "display" in summary:
+        return summary["display"][0] / summary["reach"]["degreesAcrossWidth"] * summary.get("sensitivity", 1)
+    return None
+
+
 def load(folder):
     lines = lambda name: [json.loads(line) for line in open(folder / name) if line.strip()]
     summary = json.load(open(folder / "summary.json")) if (folder / "summary.json").exists() else {}
@@ -72,7 +81,8 @@ def measure(folder):
         "run": folder.name,
         "mode": mode,
         "calibrated": {True: "yes", False: "no"}.get(summary.get("calibrated"), "?"),
-        "reach": "%.0f°×%.0f°" % (summary["reach"]["degreesAcrossWidth"], summary["reach"]["degreesAcrossHeight"]) if "reach" in summary else "?",
+        "speed pt/°": speed_of(summary),
+        "flick boost": summary.get("flickBoost"),
         "hits": "%d of %d" % (len(hits), len(trials)),
         "typical time s": median(t["seconds"] for t in hits),
         "typical miss pt": median(t.get("error") for t in trials),
@@ -111,8 +121,10 @@ def measure(folder):
     if aims and pointer and "reach" in summary and "display" in summary:
         reach = summary["reach"]
         width, height = summary["display"]
-        sensitivity = summary.get("sensitivity", 1)
-        scale = (width / reach["degreesAcrossWidth"] * sensitivity, height / reach["degreesAcrossHeight"] * sensitivity)
+        speed = speed_of(summary)
+        scale = (speed, speed) if "speed" in summary else (
+            width / reach["degreesAcrossWidth"] * summary.get("sensitivity", 1),
+            height / reach["degreesAcrossHeight"] * summary.get("sensitivity", 1))
         aim_times = [a[0] for a in aims]
         start = pointer[0]["t"] + 5
         across, down = [], []
