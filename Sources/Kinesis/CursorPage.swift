@@ -24,6 +24,7 @@ struct CursorPage: View {
                  : "connect your band and enable Mac controls to try it.")
                 .font(KinesisType.body).foregroundStyle(KinesisStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            ArmMirror(model: model)
 
             Lever(title: "speed", value: String(format: "%.0f° of turn crosses this screen", degreesAcross),
                   detail: "how far the pointer moves when you turn your arm.", slower: "slower", faster: "faster") {
@@ -75,6 +76,52 @@ struct CursorPage: View {
         }
         .onAppear { model.setCursorPageVisible(true) }
         .onDisappear { model.setCursorPageVisible(false) }
+    }
+}
+
+/// The hand, turning as the forearm turns and pinching as the fingers pinch, so the
+/// wearer sees what the band reads: the forearm's direction. A held pose drifts back
+/// to the middle over a few seconds, so the hand never sits at an odd angle.
+private struct ArmMirror: View {
+    @ObservedObject var model: BandModel
+    @State private var rest: ForearmAim?
+    @Environment(\.colorScheme) private var scheme
+
+    /// Degrees from rest, left and up, within what the picture can show.
+    private var turned: SIMD2<Double>? {
+        guard let aim = model.cursorAim, let rest else { return nil }
+        let left = remainder(aim.azimuth - rest.azimuth, 360)
+        return SIMD2(max(-40, min(40, left)), max(-40, min(40, aim.elevation - rest.elevation)))
+    }
+
+    var body: some View {
+        HStack(spacing: 20) {
+            HandView(scene: HandSceneView(hand: model.bandHand,
+                                          highlight: model.pinchedFinger.map { $0 == "middle" ? .middle : .index } ?? .none,
+                                          sustained: model.pinchedFinger != nil, aim: turned))
+                .frame(width: 170, height: 150)
+                .background {
+                    Circle().fill(RadialGradient(colors: [KinesisStyle.pool, .clear], center: .center, startRadius: 20, endRadius: 90))
+                        .opacity(scheme == .dark ? 1 : 0)
+                }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("your arm, live").font(KinesisType.body)
+                Text(model.cursorAim == nil ? "connect your band to see the hand follow your arm."
+                     : "the hand follows your forearm. the pointer moves with your forearm, and twisting your wrist never moves it.")
+                    .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onChange(of: model.cursorAim) { _, aim in
+            guard let aim else { rest = nil; return }
+            guard var next = rest else { rest = aim; return }
+            // 20 updates a second: rest follows the arm over about 2.5 seconds.
+            next.azimuth += remainder(aim.azimuth - next.azimuth, 360) * 0.02
+            next.elevation += (aim.elevation - next.elevation) * 0.02
+            rest = next
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("A hand that follows your forearm")
     }
 }
 
