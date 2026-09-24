@@ -237,7 +237,7 @@ import KinesisCore
     private(set) var clicks: [(CGMouseButton, Int)] = []
     /// The pointer, which the trackpad can move too.
     var location = CGPoint(x: 800, y: 500)
-    let displayWidth = 1600.0
+    let displaySize = CGSize(width: 1600, height: 1000)
     private(set) var cursorMoves: [CGPoint] = []
     var cursorLocation: CGPoint? { location }
     func moveCursor(to point: CGPoint) throws -> CGPoint {
@@ -272,6 +272,9 @@ import KinesisCore
     init(hand: BandHand = .right) {
         let defaults = MemoryDefaults()
         defaults.set(true, forKey: "setupCompleted")
+        // 40° across a 1600-point display and 25° down a 1000-point one: 40 points a degree both ways.
+        defaults.set(try? JSONEncoder().encode(PointerReach(degreesAcrossWidth: 40, degreesAcrossHeight: 25)),
+                     forKey: "pointerReach.cursor-test-band.right")
         let clock = clock
         model = BandModel(defaults: defaults, connection: connection, controls: controls,
                           sessionStore: SavedSessionStore(), clock: { clock.now })
@@ -284,6 +287,22 @@ import KinesisCore
         connection.send(.heartbeat, at: clock.now)
         connection.send(.handedness(hand), at: clock.now)
         model.toggleControls()
+    }
+
+    /// Turns the arm steadily to an aim over `seconds`, then holds it briefly.
+    func sweep(to azimuth: Double, _ elevation: Double = 0, from start: (Double, Double), seconds: Double = 0.4) async throws {
+        let steps = Int(seconds * 128)
+        for step in 1...steps {
+            let t = Double(step) / Double(steps)
+            clock.now += 1.0 / 128
+            stamp += 7_812
+            connection.send(.orientation(timestamp: stamp, values: bandQuaternion(azimuth: start.0 + (azimuth - start.0) * t,
+                                                                               elevation: start.1 + (elevation - start.1) * t)),
+                            at: clock.now)
+            // Let display frames pass as the arm moves, so the pointer follows along.
+            if step % 8 == 0 { try await Task.sleep(for: .milliseconds(17)) }
+        }
+        try await aim(azimuth, elevation, for: 0.2)
     }
 
     /// Holds an aim at 128 Hz, then lets a few display frames pass.
@@ -316,23 +335,26 @@ import KinesisCore
 
 private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(point.x - x) < 5 && abs(point.y - y) < 5 }
 
-@Test @MainActor func airCursorPointsWithTheForearmAndOwnsPinchesUntilTurnedOff() async throws {
+@Test @MainActor func airCursorFollowsTheForearmAndOwnsPinchesUntilTurnedOff() async throws {
     let rig = CursorRig()
     let model = rig.model
     try await rig.aim(0)
     model.setAirCursorEnabled(true)
     #expect(model.airCursorEnabled)
-    // Turning on moves nothing: the aim at that moment points at the pointer.
+    // Turning on moves nothing, and a still arm moves nothing.
+    try await rig.aim(0)
     try await rig.aim(0)
     #expect(rig.controls.cursorMoves.isEmpty)
-    try await rig.aim(10)
-    #expect(near(rig.pointer, 400, 500))
-    try await rig.aim(10, 5)
-    #expect(near(rig.pointer, 400, 300))
+    // Left moves it left, and up moves it up.
+    try await rig.sweep(to: 10, from: (0, 0))
+    #expect(rig.pointer.x < 700 && abs(rig.pointer.y - 500) < 5)
+    let afterLeft = rig.pointer
+    try await rig.sweep(to: 10, 5, from: (10, 0))
+    #expect(rig.pointer.y < afterLeft.y - 50 && abs(rig.pointer.x - afterLeft.x) < 5)
     // Twisting the wrist in place moves nothing.
     let moves = rig.controls.cursorMoves.count
     try await rig.aim(10, 5, twist: 60)
-    #expect(rig.controls.cursorMoves.count == moves && near(rig.pointer, 400, 300))
+    #expect(rig.controls.cursorMoves.count == moves)
     // Pinches click once each; the band's other reports of the same contact do not.
     rig.gesture("index", "press")
     rig.gesture("index", "unknown", derived: "buttonPress")
@@ -354,7 +376,7 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     #expect(rig.controls.actions == [.previousDesktop] && !model.dialEngaged)
     model.setAirCursorEnabled(false)
     let stopped = rig.controls.cursorMoves.count
-    try await rig.aim(30)
+    try await rig.sweep(to: 30, from: (10, 5))
     #expect(rig.controls.cursorMoves.count == stopped)
     // Pausing, leaving developer mode, and disconnecting each turn it off.
     model.setAirCursorEnabled(true)
@@ -371,20 +393,32 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     await model.shutdown()
 }
 
-@Test @MainActor func pointingBackAfterAnEdgeAndMovingTheTrackpadBothStayInStep() async throws {
+@Test @MainActor func slowAimingIsFinerThanAQuickFlickOverTheSameTurn() async throws {
+    func travel(seconds: Double) async throws -> Double {
+        let rig = CursorRig()
+        try await rig.aim(0)
+        rig.model.setAirCursorEnabled(true)
+        try await rig.aim(0)
+        try await rig.sweep(to: 6, from: (0, 0), seconds: seconds)
+        await rig.model.shutdown()
+        return 800 - rig.pointer.x
+    }
+    let slow = try await travel(seconds: 3), quick = try await travel(seconds: 0.12)
+    // Six degrees at 40 points a degree is 240 points at the base scale.
+    #expect(slow > 0 && slow < 160)
+    #expect(quick > slow * 2)
+}
+
+@Test @MainActor func theTrackpadAndTheArmBothMoveTheSamePointer() async throws {
     let rig = CursorRig()
     try await rig.aim(0)
     rig.model.setAirCursorEnabled(true)
     try await rig.aim(0)
-    try await rig.aim(-5)
-    #expect(near(rig.pointer, 1000, 500))
-    // The trackpad moves the pointer. The arm has not moved, so nothing jumps back.
     rig.controls.location = CGPoint(x: 100, y: 100)
-    try await rig.aim(-5)
-    #expect(near(rig.pointer, 100, 100))
-    // From there, the arm moves it as before.
-    try await rig.aim(-7)
-    #expect(near(rig.pointer, 180, 100))
+    try await rig.aim(0)
+    #expect(rig.pointer == CGPoint(x: 100, y: 100))
+    try await rig.sweep(to: -5, from: (0, 0))
+    #expect(rig.pointer.x > 110 && abs(rig.pointer.y - 100) < 5)
     await rig.model.shutdown()
 }
 
@@ -394,7 +428,6 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     try await rig.aim(0)
     rig.model.setAirCursorEnabled(true)
     try await rig.aim(0)
-    let moves = rig.controls.cursorMoves.count
     rig.gesture(finger, "press")
     #expect(rig.controls.clicks.map { $0.0 } == [finger == "index" ? .left : .right])
     // The arm twitches by two degrees with the pinch, and stays there.
@@ -402,10 +435,10 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     try await rig.aim(2, 1, for: 0.3)
     rig.gesture(finger, "release")
     try await rig.aim(2, 1, for: 0.3)
-    #expect(rig.controls.cursorMoves.count == moves && near(rig.pointer, 800, 500))
+    #expect(rig.controls.cursorMoves.isEmpty)
     // Afterwards the arm moves the pointer from where the click landed.
-    try await rig.aim(4, 1)
-    #expect(near(rig.pointer, 720, 500))
+    try await rig.sweep(to: 6, 1, from: (2, 1))
+    #expect(rig.pointer.x < 790)
     await rig.model.shutdown()
 }
 
@@ -415,14 +448,14 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     rig.model.setAirCursorEnabled(true)
     try await rig.aim(0)
     rig.model.setCursorRepositioning(true)
-    try await rig.aim(25, -10)
+    try await rig.sweep(to: 25, -10, from: (0, 0))
     rig.gesture("index", "press")
     #expect(rig.model.cursorRepositioning && rig.controls.cursorMoves.isEmpty && rig.controls.clicks.isEmpty)
     rig.model.setCursorRepositioning(false)
     try await rig.aim(25, -10, for: 0.3)
     #expect(rig.controls.cursorMoves.isEmpty)
-    try await rig.aim(20, -10)
-    #expect(near(rig.pointer, 1000, 500))
+    try await rig.sweep(to: 20, -10, from: (25, -10))
+    #expect(rig.pointer.x > 810)
     rig.model.setCursorRepositioning(true)
     rig.model.pause()
     #expect(!rig.model.cursorRepositioning && !rig.model.airCursorEnabled)
@@ -437,9 +470,37 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     rig.silence(1)
     try await rig.aim(30)
     #expect(rig.controls.cursorMoves.isEmpty)
-    try await rig.aim(29)
-    #expect(near(rig.pointer, 840, 500))
+    try await rig.sweep(to: 26, from: (30, 0))
+    #expect(rig.pointer.x > 810)
     await rig.model.shutdown()
+}
+
+@Test @MainActor func calibrationTakesTheAimBeforeEachPinchAndNeverClicks() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    #expect(model.pointerCalibrated && model.pointerReach.degreesAcrossWidth == 40)
+    model.resetPointerReach()
+    #expect(!model.pointerCalibrated && model.pointerReach == .standard)
+    try await rig.aim(0)
+    model.beginPointerCalibration()
+    #expect(model.pointerCalibration?.step == .center)
+    // Aim, pinch, and let the pinch nudge the arm two degrees before letting go.
+    for (azimuth, elevation) in [(0.0, 10.0), (14.0, 17.0), (-14.0, 3.0)] {
+        try await rig.aim(azimuth, elevation, for: 0.5)
+        rig.gesture("index", "press")
+        rig.gesture("index", "press", derived: "buttonHold")
+        try await rig.aim(azimuth + 2, elevation - 2, for: 0.2)
+        rig.gesture("index", "release")
+    }
+    // 28° between the corners is 70 % of the width: 40° across. 14° is 70 % of 20° up and down.
+    #expect(model.pointerCalibration == nil && model.pointerCalibrated)
+    #expect(abs(model.pointerReach.degreesAcrossWidth - 40) < 0.5 && abs(model.pointerReach.degreesAcrossHeight - 20) < 0.5)
+    #expect(rig.controls.clicks.isEmpty && rig.controls.cursorMoves.isEmpty && rig.controls.actions.isEmpty)
+    // Escape stops a calibration the same way it stops the cursor.
+    model.beginPointerCalibration()
+    model.setAirCursorEnabled(false)
+    #expect(model.pointerCalibration == nil && abs(model.pointerReach.degreesAcrossWidth - 40) < 0.5)
+    await model.shutdown()
 }
 
 @Test @MainActor func dataThatArrivesLateIsNeverActedOn() async throws {

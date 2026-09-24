@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import simd
 
@@ -72,17 +73,16 @@ struct OneEuroFilter {
     }
 }
 
-/// A laser pointer from the forearm. The pointer is anchored: when the cursor
-/// turns on or is re-anchored, the current aim maps to the current pointer
-/// position. From then on each degree of aim moves the pointer a fixed number
-/// of points, so pointing back to the same place brings it back to the same
-/// place, even after it stopped at a screen edge.
+/// Moves the pointer by how the forearm's aim changes, like a mouse, not by where
+/// it points. The first real sessions showed why: a laser mapping ties every spot on
+/// screen to one arm position, so the bottom of the screen meant hitting the desk,
+/// every bit of sway moved the pointer, and one scale was both too coarse for small
+/// targets and too slow for crossing the screen. Relative movement with acceleration
+/// keeps the arm in a small, comfortable zone.
 struct AirPointer {
-    /// Degrees of forearm turn that cross the main display at sensitivity 1.
-    static let degreesAcrossScreen = 40.0
     /// Near straight up or down the compass angle is meaningless, so it holds still there.
     static let steepElevation = 75.0
-    /// A gap this long in the orientation stream re-anchors instead of jumping.
+    /// A gap this long in the orientation stream drops the movement across it.
     static let maximumGap = 0.5
 
     private var azimuthFilter = OneEuroFilter(minimumCutoff: 1.5, beta: 0.05)
@@ -92,10 +92,11 @@ struct AirPointer {
     private var lastTime: Double?
     private var smoothed: SIMD2<Double>?
     private var held: SIMD2<Double>?
-    private var speed = 0.0
+    /// Degrees per second of the aim, smoothed.
+    private(set) var speed = 0.0
     private(set) var aim: ForearmAim?
-    private var anchorAim: ForearmAim?
-    private var anchorPoint = SIMD2<Double>.zero
+    /// The aim when movement was last taken.
+    private var taken: SIMD2<Double>?
 
     /// 0 is the most responsive and 1 the steadiest.
     var steadiness = 0.5 {
@@ -113,13 +114,12 @@ struct AirPointer {
     var slack: Double { 0.1 + 0.9 * max(0, min(1, steadiness)) }
     /// Below this speed in degrees per second the rope has its full slack. Above
     /// `fastSpeed` it has none, so a quick move lands exactly where the arm points.
-    static let slowSpeed = 5.0
-    static let fastSpeed = 30.0
+    /// Half of all aiming ran under 2°/s in the first real session, so the slack
+    /// has to let go early or fine moves feel stuck.
+    static let slowSpeed = 2.0
+    static let fastSpeed = 20.0
 
-    var isAnchored: Bool { anchorAim != nil }
-
-    /// Takes one orientation sample. Returns false after a gap, when the pointer
-    /// must be re-anchored before it moves again.
+    /// Takes one orientation sample. Returns false after a gap, whose movement is dropped.
     @discardableResult
     mutating func receive(_ sample: ForearmAim, at time: Double) -> Bool {
         let gap = lastTime.map { time - $0 } ?? .infinity
@@ -130,11 +130,11 @@ struct AirPointer {
             elevationFilter.reset()
             unwrappedAzimuth = sample.azimuth
             lastRawAzimuth = sample.azimuth
-            anchorAim = nil
             let start = SIMD2(azimuthFilter.filter(sample.azimuth, dt: 0), elevationFilter.filter(sample.elevation, dt: 0))
             smoothed = start
             held = start
             speed = 0
+            taken = start
             aim = ForearmAim(azimuth: start.x, elevation: start.y)
             return false
         }
@@ -159,22 +159,36 @@ struct AirPointer {
         return true
     }
 
-    /// The current aim now points at this position.
-    mutating func anchor(at point: SIMD2<Double>) {
-        guard let aim else { return }
-        anchorAim = aim
-        anchorPoint = point
+    /// Degrees the aim moved since the last call: compass angle (positive is left)
+    /// and elevation (positive is up). Nil until there is an aim.
+    mutating func movement() -> SIMD2<Double>? {
+        guard let aim else { return nil }
+        let now = SIMD2(aim.azimuth, aim.elevation)
+        defer { taken = now }
+        return taken.map { now - $0 }
     }
 
-    mutating func release() {
-        anchorAim = nil
+    /// Drops any movement not yet taken, such as the twitch of a pinch.
+    mutating func discard() {
+        taken = aim.map { SIMD2($0.azimuth, $0.elevation) }
     }
+}
 
-    /// Where the pointer belongs for the current aim, in global display points
-    /// with y growing downward. Not clamped to any display.
-    func target(pointsPerDegree: Double) -> SIMD2<Double>? {
-        guard let aim, let anchorAim, pointsPerDegree.isFinite, pointsPerDegree > 0 else { return nil }
-        return anchorPoint + SIMD2(-(aim.azimuth - anchorAim.azimuth), -(aim.elevation - anchorAim.elevation)) * pointsPerDegree
+/// Pointer acceleration: slow aiming moves the pointer a little, for precision, and a
+/// quick flick moves it a lot, for distance. In the first real session half of all
+/// aiming ran under 2°/s and the fastest 5 % over 40°/s.
+enum PointerAcceleration {
+    static let slowSpeed = 3.0
+    static let fastSpeed = 40.0
+    static let slowFactor = 0.35
+    static let fastFactor = 2.0
+
+    /// The multiplier on the calibrated scale at this speed in degrees per second.
+    static func factor(speed: Double) -> Double {
+        guard speed.isFinite else { return slowFactor }
+        let x = max(0, min(1, (speed - slowSpeed) / (fastSpeed - slowSpeed)))
+        let eased = x * x * (3 - 2 * x)
+        return slowFactor + (fastFactor - slowFactor) * eased
     }
 }
 
@@ -210,5 +224,81 @@ struct ArrivalDelay {
         baseline = nil
         lastBand = nil
         lastHost = nil
+    }
+}
+
+/// How much forearm turn crosses the main display, left to right and top to bottom.
+/// Stored in degrees, not points, so it survives a change of display.
+struct PointerReach: Codable, Equatable {
+    var degreesAcrossWidth: Double
+    var degreesAcrossHeight: Double
+
+    /// The typical result of four calibrations on 2026-09-24, in two poses: 64° to 73°
+    /// across and 27° to 32° up and down. People reach less up and down than across.
+    static let standard = PointerReach(degreesAcrossWidth: 65, degreesAcrossHeight: 31)
+    static let limits = 5.0...90.0
+
+    var isValid: Bool { Self.limits.contains(degreesAcrossWidth) && Self.limits.contains(degreesAcrossHeight) }
+
+    func pointsPerDegree(display: CGSize, sensitivity: Double) -> SIMD2<Double> {
+        SIMD2(display.width / degreesAcrossWidth, display.height / degreesAcrossHeight) * sensitivity
+    }
+}
+
+/// Three targets on the main display: the center, near the top left, and near the
+/// bottom right. The wearer aims at each and pinches. The two corners give the reach
+/// on each axis; the center checks that the corners were meant.
+struct PointerCalibration: Equatable {
+    enum Step: Int, CaseIterable { case center, topLeft, bottomRight }
+
+    /// Where each target sits, as a fraction of the display from its top left.
+    static func position(of step: Step) -> CGPoint {
+        switch step {
+        case .center: CGPoint(x: 0.5, y: 0.5)
+        case .topLeft: CGPoint(x: 0.15, y: 0.15)
+        case .bottomRight: CGPoint(x: 0.85, y: 0.85)
+        }
+    }
+    /// The corners are 70 % of the display apart on each axis.
+    static let span = 0.7
+
+    private(set) var step = Step.center
+    private(set) var aims: [ForearmAim] = []
+    private(set) var problem: String?
+
+    /// Records the aim for the current step. Returns the reach once all three are in.
+    mutating func record(_ aim: ForearmAim) -> PointerReach? {
+        problem = nil
+        aims.append(aim)
+        guard let next = Step(rawValue: step.rawValue + 1) else { return finish() }
+        step = next
+        return nil
+    }
+
+    private mutating func finish() -> PointerReach? {
+        let center = aims[0], topLeft = aims[1], bottomRight = aims[2]
+        // The top left is to the left (a larger compass angle) and higher.
+        let across = remainder(topLeft.azimuth - bottomRight.azimuth, 360)
+        let down = topLeft.elevation - bottomRight.elevation
+        let reach = PointerReach(degreesAcrossWidth: across / Self.span, degreesAcrossHeight: down / Self.span)
+        // The center should sit near the middle of the two corners.
+        let middle = ForearmAim(azimuth: bottomRight.azimuth + across / 2, elevation: bottomRight.elevation + down / 2)
+        let offCenter = SIMD2(remainder(center.azimuth - middle.azimuth, 360) / max(across, 1),
+                              (center.elevation - middle.elevation) / max(down, 1))
+        if across <= 0 || down <= 0 {
+            problem = "the corners came out swapped. point at each target before you pinch."
+        } else if !reach.isValid {
+            problem = reach.degreesAcrossWidth < PointerReach.limits.lowerBound || reach.degreesAcrossHeight < PointerReach.limits.lowerBound
+                ? "that was a very small movement. point your forearm at each target, not just your hand."
+                : "that was a very large movement. aim at the targets with small, comfortable turns."
+        } else if abs(offCenter.x) > 0.3 || abs(offCenter.y) > 0.3 {
+            problem = "the center didn’t line up with the corners. hold your arm the same way for all three."
+        }
+        guard problem == nil else {
+            step = .center
+            aims = []
+            return nil
+        }
+        return reach
     }
 }

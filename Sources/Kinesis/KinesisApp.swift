@@ -9,7 +9,9 @@ extension Bundle {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = BandModel()
     private var cursorKeyMonitors: [Any] = []
+    private var calibrationOverlay: CalibrationOverlay?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        calibrationOverlay = CalibrationOverlay(model: model)
         // Local monitors cover Kinesis; global monitors cover whichever app the
         // user is pointing at. Both use the app's existing Accessibility access.
         if let monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged], handler: { [weak self] event in

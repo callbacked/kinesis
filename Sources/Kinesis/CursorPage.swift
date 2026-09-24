@@ -6,14 +6,28 @@ struct CursorPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             Text("a little room to move.").font(KinesisType.title).tracking(-1.2)
-            OpenRow(title: "air cursor", detail: "experimental · point with your forearm.") {
+            OpenRow(title: "air cursor", detail: "experimental · move your forearm like a mouse.") {
                 Toggle("Air cursor", isOn: Binding(get: { model.airCursorEnabled }, set: { model.setAirCursorEnabled($0) }))
                     .toggleStyle(KinesisToggleStyle())
                     .disabled(!model.airCursorEnabled && !model.canUseAirCursor)
             }
+            OpenRow(title: "calibrate",
+                    detail: model.pointerCalibrated
+                        ? String(format: "fitted to your arm: %.0f° across, %.0f° up and down.", model.pointerReach.degreesAcrossWidth, model.pointerReach.degreesAcrossHeight)
+                        : "aim at three dots so the pointer fits how far your arm likes to move.") {
+                HStack(spacing: 14) {
+                    if model.pointerCalibrated {
+                        Button("reset") { model.resetPointerReach() }.buttonStyle(.plain)
+                            .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
+                    }
+                    Button(model.pointerCalibrated ? "redo" : "start") { model.beginPointerCalibration() }
+                        .buttonStyle(KinesisButtonStyle(prominent: !model.pointerCalibrated))
+                        .disabled(!model.canUseAirCursor || model.pointerCalibration != nil)
+                }
+            }
             Text(model.cursorRepositioning ? "pointer parked · release Option when your arm feels comfortable."
                  : model.airCursorEnabled ? "index pinch to click. middle pinch to right-click. Escape to stop."
-                 : model.canUseAirCursor ? "turn it on, then point your forearm to move the pointer. twisting your wrist doesn’t move it."
+                 : model.canUseAirCursor ? "turn it on, then move your forearm. slow for small moves, a quick flick to cross the screen. rest your elbow if you like."
                  : "connect your band and enable Mac controls to try it.")
                 .font(KinesisType.body).foregroundStyle(KinesisStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)

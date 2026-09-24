@@ -30,7 +30,7 @@ final class BandModel: ObservableObject {
     @Published private(set) var devices: [BandDevice] = []
     @Published private(set) var discoveredAddresses: Set<String> = []
     @Published var selectedAddress = "" {
-        didSet { saveBand(); refreshIdentity(); setAirCursorEnabled(false) }
+        didSet { saveBand(); refreshIdentity(); setAirCursorEnabled(false); loadPointerReach() }
     }
     @Published private(set) var phase = "Disconnected"
     @Published private(set) var busy = false
@@ -97,17 +97,24 @@ final class BandModel: ObservableObject {
     @Published var cursorSensitivity = 1.0 {
         didSet { defaults.set(cursorSensitivity, forKey: "pointerSensitivity") }
     }
-    @Published var cursorSteadiness = 0.5 {
+    @Published var cursorSteadiness = 0.3 {
         didSet {
             defaults.set(cursorSteadiness, forKey: "pointerSteadiness")
             airPointer.steadiness = cursorSteadiness
+        loadPointerReach()
         }
     }
     var canUseAirCursor: Bool { developerMode && live && controlsEnabled && handConfirmed && pendingHand == nil }
+    /// How far the forearm turns to cross the screen: measured by calibration, or the standard reach.
+    @Published private(set) var pointerReach = PointerReach.standard
+    @Published private(set) var pointerCalibrated = false
+    /// Non-nil while the three calibration targets are on screen.
+    @Published private(set) var pointerCalibration: PointerCalibration?
+    @Published private(set) var pointerCalibrationProblem: String?
+    /// The last half second of raw, on-time aim, so a calibration pinch can use the aim from just before it.
+    private var recentAims: [(time: Double, aim: ForearmAim)] = []
+    private var calibrationPinchDown = false
     private var airPointer = AirPointer()
-    /// The last two positions this app sent the pointer to. Anything else means
-    /// the pointer moved another way, such as the trackpad.
-    private var cursorPosted: [CGPoint] = []
     private var cursorNeedsAnchor = true
     private var cursorMotionResumesAt = -Double.infinity
     private var cursorLastOrientation = -Double.infinity
@@ -603,13 +610,13 @@ final class BandModel: ObservableObject {
     }
 
     func setAirCursorEnabled(_ enabled: Bool) {
-        guard !enabled || canUseAirCursor else { return }
+        if !enabled { cancelPointerCalibration() }
+        guard !enabled || (canUseAirCursor && pointerCalibration == nil) else { return }
         guard enabled != airCursorEnabled else { return }
         airCursorEnabled = enabled
         cursorRepositioning = false
-        // The pointer stays where it is, and the aim at that moment points there.
+        // Start from wherever the pointer is.
         cursorNeedsAnchor = true
-        cursorPosted = []
         cursorMotionResumesAt = -.infinity
         cursorTicker?.cancel()
         cursorTicker = nil
@@ -636,38 +643,35 @@ final class BandModel: ObservableObject {
         cursorRepositioning = active
         cursorPressedFingers.removeAll()
         pinchedFinger = nil
-        // Like lifting a mouse: when Option comes up, the aim at that moment points
-        // at wherever the pointer is.
+        // Like lifting a mouse: movement while Option is down is dropped.
         steadyCursor(until: clock() + 0.12)
     }
 
     private func flushCursorMovement() {
         let now = clock()
-        guard airCursorEnabled, !cursorRepositioning, canUseAirCursor, now >= cursorMotionResumesAt,
-              now - cursorLastOrientation <= 0.15 else { return }
+        guard airCursorEnabled, canUseAirCursor, now - cursorLastOrientation <= 0.15 else { return }
         guard controls.trusted else { pause(); return }
-        guard let location = controls.cursorLocation else { return }
-        let movedElsewhere = !cursorPosted.isEmpty
-            && cursorPosted.allSatisfy { hypot($0.x - location.x, $0.y - location.y) > 3 }
-        if cursorNeedsAnchor || !airPointer.isAnchored || cursorPosted.isEmpty || movedElsewhere {
-            airPointer.anchor(at: SIMD2(Double(location.x), Double(location.y)))
-            guard airPointer.isAnchored else { return }
+        guard let movement = airPointer.movement() else { return }
+        // A pinch, Option, or the first frame drops what moved meanwhile, like lifting
+        // a mouse. The first frame after a hold drops the settling that came with it.
+        guard !cursorRepositioning, now >= cursorMotionResumesAt else { return }
+        guard !cursorNeedsAnchor else {
             cursorNeedsAnchor = false
-            cursorPosted = [location]
             return
         }
-        let pointsPerDegree = controls.displayWidth / AirPointer.degreesAcrossScreen * cursorSensitivity
-        guard let target = airPointer.target(pointsPerDegree: pointsPerDegree) else { return }
-        let point = CGPoint(x: target.x, y: target.y)
-        guard let last = cursorPosted.last, hypot(point.x - last.x, point.y - last.y) >= 0.5 else { return }
-        do {
-            let posted = try controls.moveCursor(to: point)
-            cursorPosted = [last, posted]
-        } catch {
+        guard let location = controls.cursorLocation else { return }
+        // Turning left raises the compass angle; raising the arm raises the elevation.
+        let scale = pointerReach.pointsPerDegree(display: controls.displaySize, sensitivity: cursorSensitivity)
+            * PointerAcceleration.factor(speed: airPointer.speed)
+        let delta = SIMD2(-movement.x, -movement.y) * scale
+        guard abs(delta.x) + abs(delta.y) >= 0.05 else { return }
+        do { _ = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y)) }
+        catch {
             self.error = error.localizedDescription
             pause()
         }
     }
+
 
     func selectHand(_ hand: BandHand) {
         guard canChangeHand, hand != bandHand else { return }
@@ -732,7 +736,7 @@ final class BandModel: ObservableObject {
         } else { phase = "Preparing…" }
         live = false
         heartbeat = nil
-        airPointer.release()
+        airPointer.discard()
         cursorNeedsAnchor = true
         motionDelay.reset()
         linkDelay = 0
@@ -957,6 +961,7 @@ final class BandModel: ObservableObject {
         case .handedness(let hand):
             guard wantsConnection, !sleeping else { return }
             bandHand = hand
+            loadPointerReach()
             defaults.set(hand.rawValue, forKey: "bandHand")
             handConfirmed = true
             pendingHand = nil
@@ -1044,6 +1049,10 @@ final class BandModel: ObservableObject {
                 connectionLog.notice("Dropped a \(message.finger, privacy: .public) \(message.action, privacy: .public) that arrived \(self.linkDelay, privacy: .public)s late")
                 return
             }
+            if pointerCalibration != nil {
+                receiveCalibrationGesture(message, now: now)
+                return
+            }
             if let label = message.gestureLabel, lastGesture != label { lastGesture = label }
             if airCursorEnabled {
                 guard !cursorRepositioning else { return }
@@ -1085,7 +1094,7 @@ final class BandModel: ObservableObject {
             }
             dispatch(action)
         case .dialState(let engaged):
-            guard !airCursorEnabled else { return }
+            guard !airCursorEnabled, pointerCalibration == nil else { return }
             guard live, pendingHand == nil, abs(now - event.receivedAt) <= 0.35, !linkIsLate(at: now) else { resetDial(); return }
             // A pinch that turned has just ended: the release is not a tap.
             if !engaged && dialTurned { dialEndedAt = now }
@@ -1097,7 +1106,7 @@ final class BandModel: ObservableObject {
                 dialGate.arm(at: event.receivedAt)
             }
         case .dialTurn(let rotation):
-            guard !airCursorEnabled else { return }
+            guard !airCursorEnabled, pointerCalibration == nil else { return }
             guard live, handConfirmed, dialEngaged, abs(now - event.receivedAt) <= 0.35, rotation.isFinite else { return }
             guard !linkIsLate(at: now) else { resetDial(); dialEngaged = false; return }
             // The same intended turn produced the opposite gyro sign on the left wrist.
@@ -1119,6 +1128,8 @@ final class BandModel: ObservableObject {
             // A late sample is where the arm was, not where it is. Skipping it pauses
             // the pointer, and the gap re-anchors it when fresh data returns.
             guard delay <= Self.lateInput else { return }
+            recentAims.append((event.receivedAt, aim))
+            recentAims.removeAll { event.receivedAt - $0.time > 0.6 }
             if !airPointer.receive(aim, at: event.receivedAt) { cursorNeedsAnchor = true }
             cursorLastOrientation = event.receivedAt
         case .gyro(let timestamp, let values):
@@ -1214,9 +1225,76 @@ final class BandModel: ObservableObject {
         now - linkDelayAt <= 0.5 && linkDelay > Self.lateInput
     }
 
+    // MARK: - pointer calibration
+
+    private var pointerReachKey: String { "pointerReach.\(selectedAddress).\(bandHand.rawValue)" }
+
+    private func loadPointerReach() {
+        let saved = defaults.data(forKey: pointerReachKey).flatMap { try? JSONDecoder().decode(PointerReach.self, from: $0) }
+        pointerReach = saved.flatMap { $0.isValid ? $0 : nil } ?? .standard
+        pointerCalibrated = saved?.isValid == true
+    }
+
+    /// Shows the three targets. Pinches aim at them instead of clicking until it ends.
+    func beginPointerCalibration() {
+        guard canUseAirCursor else { return }
+        setAirCursorEnabled(false)
+        pointerCalibrationProblem = nil
+        calibrationPinchDown = pinchedFinger != nil
+        resetDial()
+        dialEngaged = false
+        pointerCalibration = PointerCalibration()
+        lastAction = "Calibrating the air cursor · Escape to stop"
+    }
+
+    func cancelPointerCalibration() {
+        guard pointerCalibration != nil else { return }
+        pointerCalibration = nil
+        lastAction = "Calibration cancelled"
+    }
+
+    /// Forgets this band's calibration and goes back to the standard reach.
+    func resetPointerReach() {
+        defaults.removeObject(forKey: pointerReachKey)
+        loadPointerReach()
+    }
+
+    private func receiveCalibrationGesture(_ message: BandGesture, now: Double) {
+        guard !message.synthetic, message.finger == "index" else { return }
+        let actions = [message.action, message.derivedAction]
+        if actions.contains(where: { ["release", "buttonRelease", "buttonHoldRelease"].contains($0) }) {
+            calibrationPinchDown = false
+            return
+        }
+        guard actions.contains(where: { ["press", "buttonPress"].contains($0) }), !calibrationPinchDown else { return }
+        calibrationPinchDown = true
+        // The aim a moment before the pinch: the pinch itself nudges the forearm.
+        let window = recentAims.filter { (0.1...0.3).contains(message.receivedAt - $0.time) }
+        guard !window.isEmpty, now - (recentAims.last?.time ?? -.infinity) <= 0.3 else {
+            pointerCalibrationProblem = "no fresh motion from the band. keep it close, then pinch again."
+            return
+        }
+        // Average the compass angle around the first sample, so the seam at ±180° can't split it.
+        let first = window[0].aim.azimuth
+        let azimuth = first + window.map { remainder($0.aim.azimuth - first, 360) }.reduce(0, +) / Double(window.count)
+        let elevation = window.map(\.aim.elevation).reduce(0, +) / Double(window.count)
+        guard var calibration = pointerCalibration else { return }
+        let reach = calibration.record(ForearmAim(azimuth: azimuth, elevation: elevation))
+        pointerCalibrationProblem = calibration.problem
+        if let reach {
+            pointerCalibration = nil
+            pointerReach = reach
+            pointerCalibrated = true
+            if let data = try? JSONEncoder().encode(reach) { defaults.set(data, forKey: pointerReachKey) }
+            lastAction = String(format: "Air cursor calibrated: %.0f° across, %.0f° up and down", reach.degreesAcrossWidth, reach.degreesAcrossHeight)
+            connectionLog.notice("Pointer calibrated: \(reach.degreesAcrossWidth, privacy: .public)° across, \(reach.degreesAcrossHeight, privacy: .public)° up and down")
+        } else {
+            pointerCalibration = calibration
+        }
+    }
+
     private func steadyCursor(until time: Double) {
-        // Hold the pointer still through a pinch, then let the aim at that moment
-        // point there, so the twitch of the pinch never moves it.
+        // Hold the pointer still through a pinch, and drop what the pinch's twitch moved.
         cursorMotionResumesAt = max(cursorMotionResumesAt, time)
         cursorNeedsAnchor = true
     }

@@ -9,8 +9,8 @@ protocol MacControls {
     func post(_ action: MacAction) throws
     /// Where the pointer is now, in global display points with y growing downward.
     var cursorLocation: CGPoint? { get }
-    /// The width of the main display in points.
-    var displayWidth: Double { get }
+    /// The size of the main display in points.
+    var displaySize: CGSize { get }
     /// Moves the pointer as close to this point as a real display allows, and returns where it went.
     func moveCursor(to point: CGPoint) throws -> CGPoint
     func click(_ button: CGMouseButton, count: Int) throws
@@ -27,7 +27,7 @@ struct MacShortcuts: MacControls {
 
     var cursorLocation: CGPoint? { CGEvent(source: nil)?.location }
 
-    var displayWidth: Double { Double(NSScreen.main?.frame.width ?? 1440) }
+    var displaySize: CGSize { NSScreen.main?.frame.size ?? CGSize(width: 1440, height: 900) }
 
     func moveCursor(to point: CGPoint) throws -> CGPoint {
         guard trusted else { throw KinesisError(message: "Allow Kinesis in Accessibility to move the cursor.") }

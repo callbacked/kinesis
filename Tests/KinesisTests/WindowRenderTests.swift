@@ -32,7 +32,7 @@ private struct AllowedControls: MacControls {
     func requestAccess() {}
     func post(_ action: MacAction) throws {}
     var cursorLocation: CGPoint? { .zero }
-    var displayWidth: Double { 1600 }
+    var displaySize: CGSize { CGSize(width: 1600, height: 1000) }
     func moveCursor(to point: CGPoint) throws -> CGPoint { point }
     func click(_ button: CGMouseButton, count: Int) throws {}
 }
