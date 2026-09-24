@@ -84,40 +84,62 @@ struct AirPointer {
     static let steepElevation = 75.0
     /// A gap this long in the orientation stream drops the movement across it.
     static let maximumGap = 0.5
+    /// Observed scale, not a datasheet value: raw gyro counts to degrees per second.
+    static let gyroScale = 0.07
 
-    private var azimuthFilter = OneEuroFilter(minimumCutoff: 1.5, beta: 0.05)
-    private var elevationFilter = OneEuroFilter(minimumCutoff: 1.5, beta: 0.05)
+    private var azimuthFilter = OneEuroFilter(minimumCutoff: 3, beta: 0.05)
+    private var elevationFilter = OneEuroFilter(minimumCutoff: 3, beta: 0.05)
     private var unwrappedAzimuth: Double?
     private var lastRawAzimuth = 0.0
     private var lastTime: Double?
-    private var smoothed: SIMD2<Double>?
-    private var held: SIMD2<Double>?
-    /// Degrees per second of the aim, smoothed.
-    private(set) var speed = 0.0
     private(set) var aim: ForearmAim?
-    /// The aim when movement was last taken.
-    private var taken: SIMD2<Double>?
+    /// Movement not yet taken, already scaled by stillness and acceleration.
+    private var pending = SIMD2<Double>.zero
+    /// The gate's view of speed: it rises with the gyro at once and falls over 150 ms,
+    /// so the smoothing can finish a quick move after the arm has stopped.
+    private var gateSpeed = 0.0
+    private var gyroBias = SIMD3<Double>.zero
+    private var lastGyroTime: Double?
+    /// Degrees per second the aim is turning, from the gyro, without wrist twist.
+    private(set) var speed = 0.0
 
     /// 0 is the most responsive and 1 the steadiest.
-    var steadiness = 0.5 {
-        didSet {
-            let cutoff = 3.0 - 1.5 * max(0, min(1, steadiness))
-            azimuthFilter.minimumCutoff = cutoff
-            elevationFilter.minimumCutoff = cutoff
-        }
+    var steadiness = 0.5
+
+    /// Below `still.lowerBound` degrees per second the arm counts as held still and
+    /// the pointer does not move; above `still.upperBound` it moves fully.
+    ///
+    /// Measured 2026-09-24 with the gyro smoothed over 100 ms, leaving out the twist
+    /// around the forearm: holding still ran 0.5°/s typically and 0.9°/s at the 90th
+    /// percentile, and slow, careful moves ran 1.2 to 1.8°/s typically. The orientation
+    /// alone can't separate the two (1.7 against 1.8°/s), and a positional dead zone
+    /// gave slow moves backlash: they felt like an arm that was asleep.
+    var still: ClosedRange<Double> {
+        let low = 0.5 + 0.7 * max(0, min(1, steadiness))
+        return low...(low + 0.5)
     }
 
-    /// The radius, in degrees, of the circle the aim must leave before the pointer moves.
-    /// A held arm sways by about 0.2° typically and up to 1°, mostly 1 to 3 times a second
-    /// (measured 2026-09-24). Sway that slow can't be filtered out without lag, so the
-    /// pointer follows it on a rope instead: nothing moves inside the circle.
-    var slack: Double { 0.1 + 0.9 * max(0, min(1, steadiness)) }
-    /// Below this speed in degrees per second the rope has its full slack. Above
-    /// `fastSpeed` it has none, so a quick move lands exactly where the arm points.
-    /// Half of all aiming ran under 2°/s in the first real session, so the slack
-    /// has to let go early or fine moves feel stuck.
-    static let slowSpeed = 2.0
-    static let fastSpeed = 20.0
+    /// How much of the aim's movement reaches the pointer: 0 when held still, 1 when moving.
+    var motion: Double {
+        let x = max(0, min(1, (gateSpeed - still.lowerBound) / (still.upperBound - still.lowerBound)))
+        return x * x * (3 - 2 * x)
+    }
+
+    /// Takes one gyro sample in raw counts. Only its rate is used: the orientation
+    /// says where the forearm points, and the gyro says whether it is moving.
+    mutating func receiveGyro(_ raw: SIMD3<Double>, at time: Double) {
+        guard (0..<3).allSatisfy({ raw[$0].isFinite }) else { return }
+        let dt = lastGyroTime.map { time - $0 } ?? 0
+        lastGyroTime = time
+        guard dt > 0, dt < Self.maximumGap else { return }
+        let corrected = raw * Self.gyroScale - gyroBias
+        // The resting offset drifts. Learn it only while the arm is clearly still.
+        if simd_length(corrected) < 0.8 { gyroBias += corrected * (1 - exp(-dt / 4)) }
+        // Body +y is the forearm, so a rate around y is a twist, which never moves the pointer.
+        let rate = (corrected.x * corrected.x + corrected.z * corrected.z).squareRoot()
+        speed += (rate - speed) * (1 - exp(-dt / 0.1))
+        gateSpeed = max(speed, gateSpeed * exp(-dt / 0.15))
+    }
 
     /// Takes one orientation sample. Returns false after a gap, whose movement is dropped.
     @discardableResult
@@ -131,10 +153,7 @@ struct AirPointer {
             unwrappedAzimuth = sample.azimuth
             lastRawAzimuth = sample.azimuth
             let start = SIMD2(azimuthFilter.filter(sample.azimuth, dt: 0), elevationFilter.filter(sample.elevation, dt: 0))
-            smoothed = start
-            held = start
-            speed = 0
-            taken = start
+            pending = .zero
             aim = ForearmAim(azimuth: start.x, elevation: start.y)
             return false
         }
@@ -143,44 +162,39 @@ struct AirPointer {
             unwrappedAzimuth! += remainder(sample.azimuth - lastRawAzimuth, 360)
         }
         lastRawAzimuth = sample.azimuth
-        let current = SIMD2(azimuthFilter.filter(unwrappedAzimuth!, dt: gap), elevationFilter.filter(sample.elevation, dt: gap))
-        if let smoothed {
-            let instant = simd_length(current - smoothed) / gap
-            speed += (instant - speed) * (1 - exp(-gap * 2 * .pi * 4))
+        let next = ForearmAim(azimuth: azimuthFilter.filter(unwrappedAzimuth!, dt: gap),
+                              elevation: elevationFilter.filter(sample.elevation, dt: gap))
+        if let previous = aim {
+            // Scale each step by the speed at that moment, so a flick keeps its gain
+            // even when the pointer is read a frame later.
+            let step = SIMD2(next.azimuth - previous.azimuth, next.elevation - previous.elevation)
+            pending += step * motion * PointerAcceleration.factor(speed: speed)
         }
-        smoothed = current
-        let fraction = max(0, min(1, (Self.fastSpeed - speed) / (Self.fastSpeed - Self.slowSpeed)))
-        let radius = slack * fraction
-        var rope = held ?? current
-        let offset = current - rope, distance = simd_length(offset)
-        if distance > radius { rope += offset * ((distance - radius) / distance) }
-        held = rope
-        aim = ForearmAim(azimuth: rope.x, elevation: rope.y)
+        aim = next
         return true
     }
 
-    /// Degrees the aim moved since the last call: compass angle (positive is left)
-    /// and elevation (positive is up). Nil until there is an aim.
+    /// Degrees of movement since the last call, after stillness and acceleration:
+    /// compass angle (positive is left) and elevation (positive is up). Nil until there is an aim.
     mutating func movement() -> SIMD2<Double>? {
-        guard let aim else { return nil }
-        let now = SIMD2(aim.azimuth, aim.elevation)
-        defer { taken = now }
-        return taken.map { now - $0 }
+        guard aim != nil else { return nil }
+        defer { pending = .zero }
+        return pending
     }
 
     /// Drops any movement not yet taken, such as the twitch of a pinch.
     mutating func discard() {
-        taken = aim.map { SIMD2($0.azimuth, $0.elevation) }
+        pending = .zero
     }
 }
 
-/// Pointer acceleration: slow aiming moves the pointer a little, for precision, and a
-/// quick flick moves it a lot, for distance. In the first real session half of all
-/// aiming ran under 2°/s and the fastest 5 % over 40°/s.
+/// Pointer acceleration: slow aiming moves the pointer less, for precision, and a
+/// quick flick moves it more, for distance. Slow moves once ran at 0.35 and felt
+/// numb; careful moves measured 1.2 to 1.8°/s and flicks over 30°/s.
 enum PointerAcceleration {
-    static let slowSpeed = 3.0
-    static let fastSpeed = 40.0
-    static let slowFactor = 0.35
+    static let slowSpeed = 2.0
+    static let fastSpeed = 30.0
+    static let slowFactor = 0.6
     static let fastFactor = 2.0
 
     /// The multiplier on the calibrated scale at this speed in degrees per second.

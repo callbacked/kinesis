@@ -296,6 +296,9 @@ import KinesisCore
             let t = Double(step) / Double(steps)
             clock.now += 1.0 / 128
             stamp += 7_812
+            // The gyro turns at the sweep's rate, around an axis other than the forearm.
+            let rate = hypot(azimuth - start.0, elevation - start.1) / seconds / AirPointer.gyroScale
+            connection.send(.gyro(timestamp: stamp, values: SIMD3(rate, 0, 0)), at: clock.now)
             connection.send(.orientation(timestamp: stamp, values: bandQuaternion(azimuth: start.0 + (azimuth - start.0) * t,
                                                                                elevation: start.1 + (elevation - start.1) * t)),
                             at: clock.now)
@@ -311,6 +314,7 @@ import KinesisCore
         while clock.now < end {
             clock.now += 1.0 / 128
             stamp += 7_812
+            connection.send(.gyro(timestamp: stamp, values: .zero), at: clock.now)
             connection.send(.orientation(timestamp: stamp, values: bandQuaternion(azimuth: azimuth, elevation: elevation, twist: twist)),
                             at: clock.now)
         }

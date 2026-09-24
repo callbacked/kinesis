@@ -97,9 +97,9 @@ final class BandModel: ObservableObject {
     @Published var cursorSensitivity = 1.0 {
         didSet { defaults.set(cursorSensitivity, forKey: "pointerSensitivity") }
     }
-    @Published var cursorSteadiness = 0.3 {
+    @Published var cursorSteadiness = 0.5 {
         didSet {
-            defaults.set(cursorSteadiness, forKey: "pointerSteadiness")
+            defaults.set(cursorSteadiness, forKey: "pointerStillness")
             airPointer.steadiness = cursorSteadiness
         loadPointerReach()
         }
@@ -314,8 +314,8 @@ final class BandModel: ObservableObject {
         developerMode = defaults.bool(forKey: "developerMode")
         let cursorSensitivity = defaults.double(forKey: "pointerSensitivity")
         if (0.25...4).contains(cursorSensitivity) { self.cursorSensitivity = cursorSensitivity }
-        if defaults.object(forKey: "pointerSteadiness") != nil {
-            let steadiness = defaults.double(forKey: "pointerSteadiness")
+        if defaults.object(forKey: "pointerStillness") != nil {
+            let steadiness = defaults.double(forKey: "pointerStillness")
             if (0...1).contains(steadiness) { cursorSteadiness = steadiness }
         }
         airPointer.steadiness = cursorSteadiness
@@ -661,8 +661,8 @@ final class BandModel: ObservableObject {
         }
         guard let location = controls.cursorLocation else { return }
         // Turning left raises the compass angle; raising the arm raises the elevation.
+        // Stillness and acceleration are already in the movement, sample by sample.
         let scale = pointerReach.pointsPerDegree(display: controls.displaySize, sensitivity: cursorSensitivity)
-            * PointerAcceleration.factor(speed: airPointer.speed)
         let delta = SIMD2(-movement.x, -movement.y) * scale
         guard abs(delta.x) + abs(delta.y) >= 0.05 else { return }
         do { _ = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y)) }
@@ -1133,7 +1133,8 @@ final class BandModel: ObservableObject {
             if !airPointer.receive(aim, at: event.receivedAt) { cursorNeedsAnchor = true }
             cursorLastOrientation = event.receivedAt
         case .gyro(let timestamp, let values):
-            _ = measureLinkDelay(band: timestamp, host: event.receivedAt)
+            let delay = measureLinkDelay(band: timestamp, host: event.receivedAt)
+            if delay <= Self.lateInput { airPointer.receiveGyro(values, at: event.receivedAt) }
             if developerMode { motion.receiveGyro(values, at: event.receivedAt) }
         }
         maxDeliveryDelay = max(maxDeliveryDelay, now - event.receivedAt)

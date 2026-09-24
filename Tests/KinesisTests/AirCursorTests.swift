@@ -44,8 +44,17 @@ private struct Feed {
 
     init(steadiness: Double = 0) { pointer.steadiness = steadiness }
 
+    private var last: ForearmAim?
+    /// Gyro noise in degrees per second, like the resting sensor.
+    var noise = 0.3
+
     mutating func sample(_ aim: ForearmAim) {
         time += 1.0 / 128
+        // The gyro reports how fast the aim turns, on an axis other than the forearm.
+        let rate = last.map { hypot(remainder(aim.azimuth - $0.azimuth, 360), aim.elevation - $0.elevation) * 128 } ?? 0
+        let jitter = noise * sin(time * 97)
+        pointer.receiveGyro(SIMD3(rate + jitter, 0, jitter) / AirPointer.gyroScale, at: time)
+        last = aim
         pointer.receive(aim, at: time)
         moved += pointer.movement() ?? .zero
     }
@@ -72,16 +81,19 @@ private struct Feed {
     #expect(simd_length(feed.moved) < 1e-9)
     feed.moved = .zero
     feed.sweep(from: ForearmAim(azimuth: 90, elevation: 10), to: ForearmAim(azimuth: 100, elevation: 15), seconds: 0.5)
-    // Within the smallest dead zone, 0.1°, of ten left and five up.
-    #expect(abs(feed.moved.x - 10) < 0.15 && abs(feed.moved.y - 5) < 0.15)
+    // Ten left and five up, scaled by the acceleration at about 22°/s, in the same direction.
+    let factor = PointerAcceleration.factor(speed: hypot(10, 5) / 0.5)
+    // The speed ramps up over the first 100 ms, so the start of the move gets a little less.
+    #expect(feed.moved.x > 10 * factor * 0.8 && feed.moved.x < 10 * factor * 1.05)
+    #expect(abs(feed.moved.x / feed.moved.y - 2) < 0.05)
 }
 
 @Test func movementIsContinuousAcrossTheCompassSeam() {
     var feed = Feed()
     feed.hold(ForearmAim(azimuth: 178, elevation: 0), seconds: 0.5)
     feed.sweep(from: ForearmAim(azimuth: 178, elevation: 0), to: ForearmAim(azimuth: 182, elevation: 0), seconds: 0.2)
-    // The compass reads −178° at the end: four degrees further left, not 356 right.
-    #expect(abs(feed.moved.x - 4) < 0.15)
+    // The compass reads −178° at the end: further left, not 356° right.
+    #expect(feed.moved.x > 3 && feed.moved.x < 4 * PointerAcceleration.fastFactor)
 }
 
 @Test func aGapInTheStreamDropsTheMovementAcrossIt() {
@@ -99,18 +111,20 @@ private struct Feed {
     #expect(abs(feed.moved.x) < 1e-9)
 }
 
-@Test func swayInsideTheDeadZoneNeverMovesThePointer() {
-    for steadiness in [0.3, 1.0] {
-        var feed = Feed(steadiness: steadiness)
-        feed.hold(ForearmAim(azimuth: 90, elevation: 0), seconds: 0.5)
-        let slack = feed.pointer.slack
-        // A 2 Hz sway, a little smaller than the dead zone, like a held arm.
-        for _ in 0..<(3 * 128) {
-            let t = feed.time + 1.0 / 128
-            feed.sample(ForearmAim(azimuth: 90 + slack * 0.9 * sin(2 * .pi * 2 * t), elevation: 0))
-        }
-        #expect(simd_length(feed.moved) < 0.02)
+@Test func aHeldArmStaysStillAndASlowMoveStillMoves() {
+    // A held arm: 0.06° of 2 Hz sway, turning at under 0.9°/s like the measured hold.
+    var held = Feed(steadiness: 0.5)
+    held.hold(ForearmAim(azimuth: 90, elevation: 0), seconds: 1)
+    for _ in 0..<(3 * 128) {
+        let t = held.time + 1.0 / 128
+        held.sample(ForearmAim(azimuth: 90 + 0.06 * sin(2 * .pi * 2 * t), elevation: 0))
     }
+    #expect(simd_length(held.moved) < 0.02)
+    // A careful move at 1.5°/s, like the measured slow moves, gets through at the slow gain.
+    var slow = Feed(steadiness: 0.5)
+    slow.hold(ForearmAim(azimuth: 90, elevation: 0), seconds: 1)
+    slow.sweep(from: ForearmAim(azimuth: 90, elevation: 0), to: ForearmAim(azimuth: 93, elevation: 0), seconds: 2)
+    #expect(slow.moved.x > 3 * PointerAcceleration.slowFactor * 0.85 && slow.moved.x < 3 * PointerAcceleration.slowFactor * 1.05)
 }
 
 @Test func accelerationGivesPrecisionWhenSlowAndDistanceWhenFast() {
@@ -122,7 +136,8 @@ private struct Feed {
     var slow = Feed(), fast = Feed()
     slow.hold(ForearmAim(azimuth: 90, elevation: 0), seconds: 0.5)
     fast.hold(ForearmAim(azimuth: 90, elevation: 0), seconds: 0.5)
-    for _ in 0..<128 { slow.sample(ForearmAim(azimuth: 90 + 2 * slow.time.truncatingRemainder(dividingBy: 1), elevation: 0)) }
+    let start = slow.time
+    for _ in 0..<128 { slow.sample(ForearmAim(azimuth: 90 + 1 * (slow.time - start), elevation: 0)) }  // 1°/s
     var fastest = 0.0
     for step in 1...32 {
         fast.sample(ForearmAim(azimuth: 90 + 20 * Double(step) / 32, elevation: 0))
