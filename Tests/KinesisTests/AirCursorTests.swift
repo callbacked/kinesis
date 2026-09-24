@@ -232,28 +232,52 @@ private struct Feed {
     }
 }
 
-@Test func thePacerSpreadsBatchesEvenlyOverFrames() {
-    // Two samples every 15 ms, shown on a 100 Hz display.
-    var pacer = PointerPacer(seconds: PointerPacer.batchSeconds)
-    var steps: [Double] = []
-    for frame in 0..<60 {
-        if frame % 3 != 1 { pacer.add(SIMD2(frame % 3 == 0 ? 3 : 0, 0)) }
-        steps.append(pacer.take(frame: 0.01)?.x ?? 0)
+@Test func thePacerPlaysBatchesBackEvenlyAtAnyRefreshRate() {
+    for refresh in [60.0, 82, 100, 144] {
+        // The arm moves 1 point per 128 Hz sample. Two samples arrive together every
+        // 15 ms, and every fifth batch after 30 ms.
+        var pacer = PointerPacer(seconds: PointerPacer.playbackSeconds)
+        var sample = 0
+        var arrival = 0.0
+        var batches = 0
+        var steps: [Double] = []
+        var frame = 0.0
+        while frame < 2 {
+            frame += 1 / refresh
+            while arrival <= frame {
+                while Double(sample) / 128 <= arrival {
+                    pacer.add(SIMD2(1, 0), at: Double(sample) / 128)
+                    sample += 1
+                }
+                batches += 1
+                arrival += batches % 5 == 0 ? 0.030 : 0.015
+            }
+            steps.append(pacer.take(at: frame)?.x ?? 0)
+        }
+        // Posted as it arrived, frames would move 0, 2 or 4 points. Played back, nearly
+        // every frame moves 128 points a second times its length, and none stalls. A
+        // 30 ms gap is as long as the playback delay, so a frame on it can be a bit off.
+        let expected = 128 / refresh
+        let settled = steps.dropFirst(10)
+        let even = settled.filter { abs($0 - expected) < expected * 0.05 }
+        #expect(Double(even.count) > Double(settled.count) * 0.85, "\(refresh) Hz")
+        let close = settled.filter { abs($0 - expected) < expected * 0.5 }
+        #expect(Double(close.count) > Double(settled.count) * 0.95, "\(refresh) Hz")
+        #expect(abs(steps.reduce(0, +) - Double(sample)) < 8)
     }
-    // Posted as it arrived, frames would move 3, 0 and 0 points: choppy.
-    let settled = steps.suffix(30)
-    #expect(settled.allSatisfy { $0 > 0.4 && $0 < 1.8 })
-    #expect(abs(steps.reduce(0, +) - 60) < 2)
-    // Before a press everything waiting goes at once.
-    pacer.add(SIMD2(5, 0))
-    let rest = pacer.take(frame: nil)
-    #expect(rest != nil && pacer.take(frame: 0.01) == nil)
 }
 
-@Test func thePacerWithNoPacingPostsEverything() {
+@Test func thePacerDropsWhatIsWaitingOnAClick() {
+    var pacer = PointerPacer(seconds: PointerPacer.playbackSeconds)
+    pacer.add(SIMD2(5, 0), at: 1)
+    pacer.clear()
+    #expect(pacer.take(at: 2) == nil)
+}
+
+@Test func thePacerWithNoPlaybackDelayPostsEverything() {
     var pacer = PointerPacer(seconds: 0)
-    pacer.add(SIMD2(4, -2))
-    #expect(pacer.take(frame: 0) == SIMD2(4, -2))
-    pacer.add(SIMD2(0.01, 0))
-    #expect(pacer.take(frame: 0.01) == nil)
+    pacer.add(SIMD2(4, -2), at: 1)
+    #expect(pacer.take(at: 1) == SIMD2(4, -2))
+    pacer.add(SIMD2(0.01, 0), at: 1.01)
+    #expect(pacer.take(at: 1.01) == nil)
 }

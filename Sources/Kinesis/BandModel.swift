@@ -123,16 +123,10 @@ final class BandModel: ObservableObject {
     /// The last half second of raw, on-time aim, so a calibration pinch can use the aim from just before it.
     private var recentAims: [(time: Double, aim: ForearmAim)] = []
     private var calibrationPinchDown = false
-    private var airPointer = AirPointer()
+    private(set) var airPointer = AirPointer()
     private var cursorNeedsAnchor = true
     private var cursorMotionResumesAt = -Double.infinity
     private var cursorLastOrientation = -Double.infinity
-    /// Where this app put the pointer over the last half second, so a click can land
-    /// where the arm aimed just before the pinch nudged it.
-    private var cursorTrail: [(time: Double, point: CGPoint)] = []
-    /// How far back a click looks: the forearm starts to move as the pinch closes,
-    /// before the band reports it.
-    static let clickLookback = 0.15
     /// The mouse button a pinch is holding down, so moving drags and letting go releases.
     private var heldButton: (button: CGMouseButton, finger: String, clicks: Int)?
     private var lastPress: (time: Double, point: CGPoint, button: CGMouseButton, clicks: Int)?
@@ -141,9 +135,7 @@ final class BandModel: ObservableObject {
     static let doubleClickDistance = 6.0
     private var cursorTicker: FrameTicker?
     private var cursorPacer: PointerPacer
-    /// Tests run the pointer on a 60 Hz timer that their fake clock is written around.
-    private let cursorFramesFromDisplay: Bool
-    private var cursorLastFrame: Double?
+    private let cursorFrames: CursorFrames
     /// True while the band's data reaches the Mac late: a congested or blocked radio link.
     @Published private(set) var linkCongested = false
     /// Input later than this is never acted on: no click, shortcut, dial step, or pointer move.
@@ -326,11 +318,11 @@ final class BandModel: ObservableObject {
          pairClient: @escaping @Sendable (MetaSession) -> any BandPairClient = { MetaPairClient(session: $0) },
          sessionStore: any MetaSessionStoring = MetaSessionStore(),
          clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
-         cursorPacing: Double = PointerPacer.batchSeconds,
-         cursorFramesFromDisplay: Bool = true) {
+         cursorPacing: Double = PointerPacer.playbackSeconds,
+         cursorFrames: CursorFrames = .display) {
         self.clock = clock
         cursorPacer = PointerPacer(seconds: cursorPacing)
-        self.cursorFramesFromDisplay = cursorFramesFromDisplay
+        self.cursorFrames = cursorFrames
         self.defaults = defaults
         self.started = clock()
         self.metricsAt = clock()
@@ -647,16 +639,16 @@ final class BandModel: ObservableObject {
         cursorRepositioning = false
         // Start from wherever the pointer is.
         cursorNeedsAnchor = true
-        cursorTrail = []
         cursorMotionResumesAt = -.infinity
         cursorTicker?.stop()
         cursorTicker = nil
         cursorPacer.clear()
-        cursorLastFrame = nil
         if enabled {
             // One move per display frame. The orientation arrives at 128 Hz.
-            cursorTicker = FrameTicker(fromDisplay: cursorFramesFromDisplay, timerInterval: cursorFramesFromDisplay ? 1.0 / 120 : 1.0 / 60) { [weak self] in
-                self?.flushCursorMovement()
+            switch cursorFrames {
+            case .display: cursorTicker = FrameTicker { [weak self] in self?.flushCursorMovement() }
+            case .timer(let interval): cursorTicker = FrameTicker(timerInterval: interval) { [weak self] in self?.flushCursorMovement() }
+            case .manual: break
             }
         }
         cursorPressedFingers = Set(pinchedFinger.map { [$0] } ?? [])
@@ -680,14 +672,27 @@ final class BandModel: ObservableObject {
         steadyCursor(until: clock() + 0.12)
     }
 
-    /// Posts this frame's share of the movement, or all of it before a press.
-    private func flushCursorMovement(all: Bool = false) {
+    /// What moves the pointer on each frame.
+    enum CursorFrames {
+        /// Every refresh of the display under the pointer.
+        case display
+        /// A timer, for tests written around a fake clock.
+        case timer(Double)
+        /// Whoever calls `cursorFrame()`, as the pointer lab does to replay at any refresh rate.
+        case manual
+    }
+
+    /// One display frame, for `CursorFrames.manual`.
+    func cursorFrame() {
+        flushCursorMovement()
+    }
+
+    /// Posts this frame's share of the movement.
+    private func flushCursorMovement() {
         let now = clock()
-        let frame = cursorLastFrame.map { max(0, min(0.1, now - $0)) } ?? 0
-        cursorLastFrame = now
         guard airCursorEnabled, canUseAirCursor, now - cursorLastOrientation <= 0.15 else { cursorPacer.clear(); return }
         guard controls.trusted else { pause(); return }
-        guard let movement = airPointer.movement() else { return }
+        guard let movement = airPointer.timedMovement() else { return }
         // A pinch, Option, or the first frame drops what moved meanwhile, like lifting
         // a mouse. The first frame after a hold drops the settling that came with it.
         guard !cursorRepositioning, now >= cursorMotionResumesAt, !cursorNeedsAnchor else {
@@ -697,15 +702,11 @@ final class BandModel: ObservableObject {
         }
         // Stillness and acceleration are already in the movement, sample by sample.
         let scale = pointerReach.pointsPerDegree(display: controls.displaySize, sensitivity: cursorSensitivity)
-        let moved = pointerReach.screenDegrees(movement) * scale
-        cursorPacer.add(moved)
-        guard let location = controls.cursorLocation, let delta = cursorPacer.take(frame: all ? nil : frame) else { return }
+        for step in movement { cursorPacer.add(pointerReach.screenDegrees(step.step) * scale, at: step.time) }
+        guard let location = controls.cursorLocation, let delta = cursorPacer.take(at: now) else { return }
         do {
-            if cursorTrail.isEmpty { cursorTrail.append((now, location)) }
-            let posted = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y),
-                                                 dragging: heldButton?.button)
-            cursorTrail.append((now, posted))
-            cursorTrail.removeAll { now - $0.time > 0.5 }
+            _ = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y),
+                                        dragging: heldButton?.button)
         } catch {
             self.error = error.localizedDescription
             pause()
@@ -1171,13 +1172,14 @@ final class BandModel: ObservableObject {
             guard delay <= Self.lateInput else { return }
             recentAims.append((event.receivedAt, aim))
             recentAims.removeAll { event.receivedAt - $0.time > 0.6 }
-            if !airPointer.receive(aim, at: event.receivedAt) { cursorNeedsAnchor = true }
+            // The band's own clock says when it sampled: two samples share each radio batch.
+            if !airPointer.receive(aim, at: event.receivedAt - delay) { cursorNeedsAnchor = true }
             cursorLastOrientation = event.receivedAt
         case .motionStreams:
             break
         case .gyro(let timestamp, let values):
             let delay = measureLinkDelay(band: timestamp, host: event.receivedAt)
-            if delay <= Self.lateInput { airPointer.receiveGyro(values, at: event.receivedAt) }
+            if delay <= Self.lateInput { airPointer.receiveGyro(values, at: event.receivedAt - delay) }
             if developerMode { motion.receiveGyro(values, at: event.receivedAt) }
         }
         maxDeliveryDelay = max(maxDeliveryDelay, now - event.receivedAt)
@@ -1212,7 +1214,7 @@ final class BandModel: ObservableObject {
         let actions = [message.action, message.derivedAction]
         if actions.contains(where: { ["release", "buttonRelease", "buttonHoldRelease"].contains($0) }) {
             if cursorPressedFingers.remove(message.finger) != nil {
-                if airPointer.approach != .tracking { airPointer.guardClick(at: message.receivedAt) }
+                if airPointer.approach != .tracking { guardCursorClick(at: message.receivedAt - linkDelay) }
                 if heldButton?.finger == message.finger { releaseHeldButton() }
             }
             if pinchedFinger == message.finger { pinchedFinger = nil }
@@ -1223,21 +1225,17 @@ final class BandModel: ObservableObject {
         guard actions.contains(where: { ["press", "buttonPress"].contains($0) }),
               !actions.contains("buttonHold"), cursorPressedFingers.insert(message.finger).inserted else { return }
         guard controls.trusted else { pause(); return }
-        // Movement from before the pinch lands before the press, not after it.
-        flushCursorMovement(all: true)
         // Held still or settling onto a target: absorb the drift that follows the pinch.
         // Tracking something that moves: hold nothing back.
-        let approach = airPointer.approach
-        if approach != .tracking { airPointer.guardClick(at: message.receivedAt) }
+        if airPointer.approach != .tracking { guardCursorClick(at: message.receivedAt - linkDelay) }
         pinchedFinger = message.finger
         let button: CGMouseButton = message.finger == "index" ? .left : .right
         // One button at a time, like a trackpad.
         if heldButton != nil { releaseHeldButton() }
-        // Held still, the press lands where the pointer was just before the pinch nudged
-        // the arm. Otherwise it lands where the pointer is: looking back while moving
-        // would yank the pointer to where it was 0.15 s ago.
-        let aimedAt = approach == .still ? cursorTrail.last { $0.time <= message.receivedAt - Self.clickLookback }?.point : nil
-        let point = aimedAt ?? controls.cursorLocation
+        // The press lands where the pointer is, so the pointer never jumps. Pressing where
+        // it was a moment before, or posting the movement still waiting all at once, both
+        // moved the pointer by 5 to 25 points at the press, and people saw it snap.
+        let point = controls.cursorLocation
         var clicks = 1
         if let lastPress, let point, lastPress.button == button, now - lastPress.time <= Self.doubleClickTime,
            hypot(point.x - lastPress.point.x, point.y - lastPress.point.y) <= Self.doubleClickDistance {
@@ -1256,6 +1254,13 @@ final class BandModel: ObservableObject {
             self.error = error.localizedDescription
             pause()
         }
+    }
+
+    /// Absorbs the drift after a pinch or a release: movement still waiting is dropped
+    /// with it, as it would carry the pointer on past the click.
+    private func guardCursorClick(at time: Double) {
+        airPointer.guardClick(at: time)
+        cursorPacer.clear()
     }
 
     /// Lets go of a button a pinch holds. Never leaves one stuck down: this runs when

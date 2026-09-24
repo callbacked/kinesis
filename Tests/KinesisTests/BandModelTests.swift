@@ -5,7 +5,7 @@ import Testing
 import KinesisCore
 @testable import Kinesis
 
-@MainActor private final class RecordedConnection: BandConnection {
+@MainActor final class RecordedConnection: BandConnection {
     private var onEvent: ((BandEvent) -> Void)?
     private var onEnd: ((Error?) -> Void)?
     var rawEMGMode = false
@@ -291,7 +291,7 @@ import KinesisCore
                      forKey: "pointerReach.cursor-test-band.right")
         let clock = clock
         model = BandModel(defaults: defaults, connection: connection, controls: controls,
-                          sessionStore: SavedSessionStore(), clock: { clock.now }, cursorPacing: 0, cursorFramesFromDisplay: false)
+                          sessionStore: SavedSessionStore(), clock: { clock.now }, cursorPacing: 0, cursorFrames: .timer(1.0 / 60))
         model.selectedAddress = "cursor-test-band"
         model.developerMode = true
         // The smallest dead zone, 0.1°: 4 points. The dead zone has its own tests.
@@ -442,7 +442,7 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
 }
 
 @Test(arguments: ["index", "middle"])
-@MainActor func aPinchNeverStopsThePointerAndClicksWhereItAimedBeforeTheTwitch(finger: String) async throws {
+@MainActor func aPinchNeverStopsOrMovesThePointer(finger: String) async throws {
     let rig = CursorRig()
     try await rig.aim(0)
     rig.model.setAirCursorEnabled(true)
@@ -458,8 +458,10 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     #expect(twitched.x < aimed.x - 2)
     rig.gesture(finger, "press")
     #expect(rig.controls.clicks.map { $0.0 } == [finger == "index" ? .left : .right])
+    // The press lands where the pointer is. Pressing where it aimed before the nudge
+    // made the pointer jump back, and people saw it snap.
     let click = try #require(rig.controls.clickPoints.last ?? nil)
-    #expect(abs(click.x - aimed.x) < 3 && abs(click.y - aimed.y) < 3)
+    #expect(click == twitched)
     // The pointer keeps following the arm through the pinch and its release.
     let moves = rig.controls.cursorMoves.count
     try await rig.sweep(to: 10, from: (5.3, 0))
@@ -1128,7 +1130,7 @@ func recoveryScanIsCancelledBeforeShutdownCompletes(action: String) async throws
     await model.shutdown()
 }
 
-@MainActor private final class SavedSessionStore: MetaSessionStoring {
+@MainActor final class SavedSessionStore: MetaSessionStoring {
     var saved: MetaSession?
     private(set) var saves = 0
     private(set) var deletions = 0

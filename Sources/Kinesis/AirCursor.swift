@@ -98,8 +98,8 @@ struct AirPointer {
     private var lastRawElevation = 0.0
     private var lastTime: Double?
     private(set) var aim: ForearmAim?
-    /// Movement not yet taken, already scaled by stillness and acceleration.
-    private var pending = SIMD2<Double>.zero
+    /// Movement not yet taken, sample by sample, already scaled by stillness and acceleration.
+    private var pending: [(time: Double, step: SIMD2<Double>)] = []
     /// The gate's view of speed: it rises with the gyro at once and falls over 150 ms,
     /// so the smoothing can finish a quick move after the arm has stopped.
     private var gateSpeed = 0.0
@@ -174,7 +174,7 @@ struct AirPointer {
         azimuthFilter.reset()
         elevationFilter.reset()
         aim = ForearmAim(azimuth: azimuthFilter.filter(azimuth, dt: 0), elevation: elevationFilter.filter(lastRawElevation, dt: 0))
-        pending = .zero
+        pending = []
     }
 
     /// How much of the aim's movement reaches the pointer at this moment: 0 when held still, 1 when moving.
@@ -218,7 +218,7 @@ struct AirPointer {
             lastRawAzimuth = sample.azimuth
             lastRawElevation = sample.elevation
             let start = SIMD2(azimuthFilter.filter(sample.azimuth, dt: 0), elevationFilter.filter(sample.elevation, dt: 0))
-            pending = .zero
+            pending = []
             aim = ForearmAim(azimuth: start.x, elevation: start.y)
             return false
         }
@@ -234,7 +234,8 @@ struct AirPointer {
             // Scale each step by the speed at that moment, so a flick keeps its gain
             // even when the pointer is read a frame later.
             let step = SIMD2(next.azimuth - previous.azimuth, next.elevation - previous.elevation)
-            pending += step * motion(at: time) * PointerAcceleration.factor(speed: speed)
+            let moved = step * motion(at: time) * PointerAcceleration.factor(speed: speed)
+            if moved != .zero { pending.append((time, moved)) }
         }
         aim = next
         return true
@@ -243,48 +244,77 @@ struct AirPointer {
     /// Degrees of movement since the last call, after stillness and acceleration:
     /// compass angle (positive is left) and elevation (positive is up). Nil until there is an aim.
     mutating func movement() -> SIMD2<Double>? {
+        timedMovement()?.reduce(.zero) { $0 + $1.step }
+    }
+
+    /// The same movement, with when the band sampled each step, for smooth playback.
+    mutating func timedMovement() -> [(time: Double, step: SIMD2<Double>)]? {
         guard aim != nil else { return nil }
-        defer { pending = .zero }
+        defer { pending = [] }
         return pending
     }
 
     /// Drops any movement not yet taken, such as the twitch of a pinch.
     mutating func discard() {
-        pending = .zero
+        pending = []
     }
 }
 
-/// Spreads the pointer's movement evenly over the display's frames. The band's
-/// samples arrive in batches every 15 ms, sometimes 30 ms (measured 2026-09-24), so
-/// posting each frame whatever arrived gave some frames two batches and some none,
-/// which looked choppy. Each frame takes a share of what is waiting instead, draining
-/// it over about one batch's time.
+/// Plays the pointer's movement back smoothly, a fixed moment behind the arm. The
+/// band's samples arrive in batches every 15 ms, sometimes 30 ms (measured
+/// 2026-09-24), so posting each frame whatever arrived gave some frames two batches
+/// and some none, which looked choppy at any refresh rate. Each step is placed at the
+/// time the band sampled it, and each frame takes the movement up to `seconds` ago,
+/// part of a step when the frame falls between two samples. A batch that arrives
+/// later than that is taken at once.
 struct PointerPacer {
-    static let batchSeconds = 0.016
+    static let playbackSeconds = 0.03
     /// 0 posts everything at once.
     var seconds: Double
-    private var waiting = SIMD2<Double>.zero
+    private var steps: [(start: Double, end: Double, points: SIMD2<Double>)] = []
+    private var takenUntil = -Double.infinity
 
     init(seconds: Double) {
         self.seconds = seconds
     }
 
-    mutating func add(_ points: SIMD2<Double>) {
-        waiting += points
+    /// Movement the band sampled at `time`. It spans the time since the sample before.
+    mutating func add(_ points: SIMD2<Double>, at time: Double) {
+        let previous = steps.last?.end ?? takenUntil
+        let end = max(time, previous)
+        steps.append((max(previous, end - 1.0 / 64), end, points))
     }
 
-    /// The points to post this frame, or nil when the share is too small to move.
-    /// A nil frame takes everything, as before a press.
-    mutating func take(frame: Double?) -> SIMD2<Double>? {
-        let share = frame.map { seconds > 0 ? 1 - exp(-$0 / seconds) : 1 } ?? 1
-        let step = waiting * share
-        guard abs(step.x) + abs(step.y) >= 0.05 else { return nil }
-        waiting -= step
-        return step
+    /// The points to post for a frame shown at `now`, or nil when the step is too small to move.
+    mutating func take(at now: Double) -> SIMD2<Double>? {
+        let until = seconds > 0 ? now - seconds : .infinity
+        var total = SIMD2<Double>.zero
+        while let first = steps.first {
+            if first.end <= until {
+                total += first.points
+                steps.removeFirst()
+                takenUntil = max(takenUntil, first.end)
+                continue
+            }
+            let from = max(first.start, takenUntil)
+            if until > from {
+                let part = first.points * ((until - from) / (first.end - from))
+                total += part
+                steps[0].points -= part
+                takenUntil = until
+            }
+            break
+        }
+        guard abs(total.x) + abs(total.y) >= 0.05 else {
+            // Keep a tiny remainder for the next frame instead of losing it.
+            if total != .zero, !steps.isEmpty { steps[0].points += total }
+            return nil
+        }
+        return total
     }
 
     mutating func clear() {
-        waiting = .zero
+        steps = []
     }
 }
 
