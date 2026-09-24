@@ -107,6 +107,9 @@ private struct BandMenu: View {
         if model.developerMode {
             Toggle("air cursor", isOn: Binding(get: { model.airCursorEnabled }, set: { model.setAirCursorEnabled($0) }))
                 .disabled(!model.airCursorEnabled && !model.canUseAirCursor)
+            #if KINESIS_LAB
+            Button("open lab") { PracticeWindow.shared.open(model: model) }
+            #endif
         }
         Divider()
         Button("open kinesis") { open() }

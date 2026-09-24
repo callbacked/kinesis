@@ -8,6 +8,8 @@ if pgrep -f "^$PWD/dist/Kinesis.app/Contents/MacOS/Kinesis$" >/dev/null; then
 fi
 
 build_args=(-c release --arch arm64 --arch x86_64 -Xswiftc -warnings-as-errors)
+# KINESIS_LAB=1 adds the practice lab, a developer tool. Releases leave it out.
+if [ "${KINESIS_LAB:-}" = 1 ]; then build_args+=(-Xswiftc -DKINESIS_LAB); fi
 binary_dir=$(swift build "${build_args[@]}" --show-bin-path)
 # SwiftPM can retain removed resources in an existing bundle.
 if [ -d "$binary_dir/Kinesis_Kinesis.bundle" ]; then

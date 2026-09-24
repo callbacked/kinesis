@@ -684,6 +684,13 @@ final class BandModel: ObservableObject {
         case manual
     }
 
+    /// Records every motion and gesture event to a file, or stops recording. The
+    /// orientation stream stays on while it records.
+    func setMotionLog(path: String?) {
+        if let path { MotionLog.shared.start(at: path) } else { MotionLog.shared.stop() }
+        updateMotionStreams()
+    }
+
     /// One display frame, for `CursorFrames.manual`.
     func cursorFrame() {
         flushCursorMovement()

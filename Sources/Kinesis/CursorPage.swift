@@ -25,6 +25,12 @@ struct CursorPage: View {
                         .disabled(!model.canUseAirCursor || model.pointerCalibration != nil)
                 }
             }
+            #if KINESIS_LAB
+            OpenRow(title: "lab", detail: "practice targets full screen. each run is saved for review.") {
+                Button("open") { PracticeWindow.shared.open(model: model) }
+                    .buttonStyle(KinesisButtonStyle())
+            }
+            #endif
             Text(model.cursorRepositioning ? "pointer parked · release Option when your arm feels comfortable."
                  : model.airCursorEnabled ? "pinch your index to click, or hold the pinch and move to drag. middle pinch to right-click. Escape to stop."
                  : model.canUseAirCursor ? "turn it on, then move your forearm. slow for small moves, a quick flick to cross the screen. rest your elbow if you like."

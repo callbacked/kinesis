@@ -1,19 +1,30 @@
 import Foundation
 import KinesisCore
 
-/// A developer tool: when KINESIS_MOTION_LOG names a file, every gyro, orientation,
-/// and gesture event is appended to it as JSON lines, for offline analysis of the
-/// air cursor. It is off unless the variable is set, and it never runs in tests.
+/// A developer tool: when KINESIS_MOTION_LOG names a file, or a lab run records,
+/// every gyro, orientation, and gesture event is appended to a file as JSON lines,
+/// for offline analysis of the air cursor. It is off otherwise, and it never runs in tests.
 @MainActor final class MotionLog {
     static let shared = MotionLog(path: ProcessInfo.processInfo.environment["KINESIS_MOTION_LOG"])
-    private let handle: FileHandle?
+    private var handle: FileHandle?
     /// While logging, every stream stays on: an analysis needs orientation even with the cursor off.
     var isOn: Bool { handle != nil }
 
     init(path: String?) {
         guard let path, !path.isEmpty else { handle = nil; return }
+        start(at: path)
+    }
+
+    /// Starts a new log at this path, ending any log already running.
+    func start(at path: String) {
+        stop()
         FileManager.default.createFile(atPath: path, contents: nil)
         handle = FileHandle(forWritingAtPath: path)
+    }
+
+    func stop() {
+        try? handle?.close()
+        handle = nil
     }
 
     func record(_ event: BandEvent) {
