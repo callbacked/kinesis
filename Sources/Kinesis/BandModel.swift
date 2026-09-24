@@ -92,7 +92,13 @@ final class BandModel: ObservableObject {
             if !developerMode { rawEMGEnabled = false; setAirCursorEnabled(false) }
         }
     }
-    @Published private(set) var airCursorEnabled = false
+    @Published private(set) var airCursorEnabled = false {
+        didSet { if airCursorEnabled != oldValue { updateMotionStreams() } }
+    }
+    /// The readings page shows orientation, so it needs that stream while it is open.
+    @Published private(set) var readingsVisible = false {
+        didSet { if readingsVisible != oldValue { updateMotionStreams() } }
+    }
     @Published private(set) var cursorRepositioning = false
     @Published var cursorSensitivity = 1.0 {
         didSet { defaults.set(cursorSensitivity, forKey: "pointerSensitivity") }
@@ -102,6 +108,7 @@ final class BandModel: ObservableObject {
             defaults.set(cursorSteadiness, forKey: "pointerStillness")
             airPointer.steadiness = cursorSteadiness
         loadPointerReach()
+        updateMotionStreams()
         }
     }
     var canUseAirCursor: Bool { developerMode && live && controlsEnabled && handConfirmed && pendingHand == nil }
@@ -109,7 +116,9 @@ final class BandModel: ObservableObject {
     @Published private(set) var pointerReach = PointerReach.standard
     @Published private(set) var pointerCalibrated = false
     /// Non-nil while the three calibration targets are on screen.
-    @Published private(set) var pointerCalibration: PointerCalibration?
+    @Published private(set) var pointerCalibration: PointerCalibration? {
+        didSet { if (pointerCalibration == nil) != (oldValue == nil) { updateMotionStreams() } }
+    }
     @Published private(set) var pointerCalibrationProblem: String?
     /// The last half second of raw, on-time aim, so a calibration pinch can use the aim from just before it.
     private var recentAims: [(time: Double, aim: ForearmAim)] = []
@@ -128,6 +137,7 @@ final class BandModel: ObservableObject {
     private var linkDelayAt = -Double.infinity
     private var linkLateSince: Double?
     private var linkOnTimeSince: Double?
+    private var lastMotionRestart = -Double.infinity
     private var cursorPressedFingers: Set<String> = []
     private var cursorArmedAt = Double.infinity
     @Published var rawEMGEnabled = false {
@@ -1132,6 +1142,8 @@ final class BandModel: ObservableObject {
             recentAims.removeAll { event.receivedAt - $0.time > 0.6 }
             if !airPointer.receive(aim, at: event.receivedAt) { cursorNeedsAnchor = true }
             cursorLastOrientation = event.receivedAt
+        case .motionStreams:
+            break
         case .gyro(let timestamp, let values):
             let delay = measureLinkDelay(band: timestamp, host: event.receivedAt)
             if delay <= Self.lateInput { airPointer.receiveGyro(values, at: event.receivedAt) }
@@ -1208,6 +1220,11 @@ final class BandModel: ObservableObject {
             if !linkCongested, host - since >= 1 {
                 linkCongested = true
                 connectionLog.notice("Band data is arriving \(delay, privacy: .public)s late; the radio link is congested")
+                // Experiment: switching the motion streams off and on may clear the band's backlog.
+                if host - lastMotionRestart >= 20 {
+                    lastMotionRestart = host
+                    connection.restartMotionStreams()
+                }
             }
         } else {
             linkLateSince = nil
@@ -1224,6 +1241,22 @@ final class BandModel: ObservableObject {
     /// True when the latest motion showed a late link. Without recent motion the delay is unknown, so not late.
     private func linkIsLate(at now: Double) -> Bool {
         now - linkDelayAt <= 0.5 && linkDelay > Self.lateInput
+    }
+
+    // MARK: - motion streams
+
+    /// Orientation is half of the link's load, and only the air cursor, its
+    /// calibration, and the readings page use it. The gyro stays on for the dial.
+    var wantedMotionStreams: MotionStreams {
+        MotionStreams(gyro: true, orientation: airCursorEnabled || pointerCalibration != nil || readingsVisible)
+    }
+
+    private func updateMotionStreams() {
+        connection.setMotionStreams(wantedMotionStreams)
+    }
+
+    func setReadingsVisible(_ visible: Bool) {
+        readingsVisible = visible
     }
 
     // MARK: - pointer calibration

@@ -10,6 +10,10 @@ import KinesisCore
     private var onEnd: ((Error?) -> Void)?
     var rawEMGMode = false
     var rawWriteError: Error?
+    private(set) var motionRequests: [MotionStreams] = []
+    private(set) var motionRestarts = 0
+    func setMotionStreams(_ streams: MotionStreams) { motionRequests.append(streams) }
+    func restartMotionStreams() { motionRestarts += 1 }
     func setRawEMGEnabled(_ enabled: Bool) throws {
         rawEMGMode = enabled
         if let rawWriteError { throw rawWriteError }
@@ -507,6 +511,27 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     await model.shutdown()
 }
 
+@Test @MainActor func orientationStreamsOnlyWhileTheCursorCalibrationOrReadingsNeedIt() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    let orientationOnly = { rig.connection.motionRequests.last?.orientation }
+    #expect(orientationOnly() == false && rig.connection.motionRequests.allSatisfy(\.gyro))
+    try await rig.aim(0)
+    model.setAirCursorEnabled(true)
+    #expect(orientationOnly() == true)
+    model.setAirCursorEnabled(false)
+    #expect(orientationOnly() == false)
+    model.beginPointerCalibration()
+    #expect(orientationOnly() == true)
+    model.cancelPointerCalibration()
+    #expect(orientationOnly() == false)
+    model.setReadingsVisible(true)
+    #expect(orientationOnly() == true)
+    model.setReadingsVisible(false)
+    #expect(orientationOnly() == false)
+    await model.shutdown()
+}
+
 @Test @MainActor func dataThatArrivesLateIsNeverActedOn() async throws {
     let rig = CursorRig()
     let model = rig.model
@@ -519,6 +544,7 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     rig.gesture("index", "press")
     #expect(rig.controls.cursorMoves.isEmpty && rig.controls.clicks.isEmpty)
     #expect(model.linkCongested)
+    #expect(rig.connection.motionRestarts == 1)
     // Without the cursor, a late swipe sends no shortcut either.
     model.setAirCursorEnabled(false)
     rig.gesture("thumb", "left")

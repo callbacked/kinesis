@@ -45,6 +45,8 @@ struct ReadingsPage: View {
             }
             MotionReadingsView(motion: model.motion, live: model.live).padding(.top, 10).reveal(4)
         }
+        .onAppear { model.setReadingsVisible(true) }
+        .onDisappear { model.setReadingsVisible(false) }
     }
 
     private func chooseCaptureFile() {

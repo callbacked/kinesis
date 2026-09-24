@@ -29,7 +29,16 @@ public final class BandSession {
     public private(set) var authenticatedPackets = 0
     public private(set) var motionMessages = 0
     public private(set) var streamsEnabled = false
-    private let streamFields = [3, 6, 8]
+    /// Gestures (3) are always on. Gyro (6) and orientation (8) stream at 128 Hz each,
+    /// which is most of the link's load, so each can be switched while connected.
+    private var motion: MotionStreams
+    private var streamFields: [Int] { [3] + (motion.gyro ? [6] : []) + (motion.orientation ? [8] : []) }
+    private static let allStreamFields = [3, 6, 8]
+    private var wantedMotion: MotionStreams?
+    private var motionRequest: (id: UInt64, wanted: MotionStreams, sentAt: Double)?
+    /// After a restart request: the streams to turn back on once "off" is confirmed.
+    private var motionAfterRestart: MotionStreams?
+    public var motionStreams: MotionStreams { motion }
     private let streamChannel: UInt16 = 0x8005
     private let configurationChannel: UInt16 = 0x8006
     private let configServiceChannel: UInt16 = 0x8007
@@ -71,7 +80,9 @@ public final class BandSession {
     private let log = Logger(subsystem: "local.callbacked.kinesis", category: "protocol")
     private var startupFrames = 0
 
-    public init(enrollment: BandEnrollmentIdentity? = nil, ceremony: OwnershipCeremony? = nil, rawEMG: Bool = false) throws {
+    public init(enrollment: BandEnrollmentIdentity? = nil, ceremony: OwnershipCeremony? = nil, rawEMG: Bool = false,
+                motion: MotionStreams = .all) throws {
+        self.motion = motion
         self.enrollment = enrollment
         self.ceremony = ceremony
         self.rawEMG = rawEMG
@@ -175,6 +186,12 @@ public final class BandSession {
     public func tick(at time: Double) -> [BandEvent] {
         dial.tick(now: time)
         var events = engagementEvents(at: time)
+        // An unanswered stream change is given up after 8 s, so a later one can go out.
+        if let pending = motionRequest, time - pending.sentAt >= 8, !stopping {
+            motionRequest = nil
+            if motionAfterRestart != nil { motionAfterRestart = nil; wantedMotion = nil }
+            events.append(BandEvent(.motionStreams(motion, confirmedAfter: time - pending.sentAt, accepted: false), at: time))
+        }
         if let handRequest, time >= handRequest.deadline, !stopping {
             self.handRequest = nil
             hand = nil
@@ -211,10 +228,47 @@ public final class BandSession {
 
     private func rawStreamUpdate(id: UInt64, enabled: Bool) throws -> Data {
         rawRequested = true
-        let control = BandWire.field(2, enabled ? 1 : 0)
-            + streamFields.reduce(into: Data()) { $0 += BandWire.field($1, 1) }
         return try encrypt(BandWire.frame(channel: streamChannel, words: [],
-            payload: BandWire.field(1, id) + BandWire.field(4, control)))
+            payload: BandWire.field(1, id) + BandWire.field(4, streamControl(motion, raw: enabled))))
+    }
+
+    /// Every stream field, on or off explicitly, so no field is left to the band's default.
+    private func streamControl(_ motion: MotionStreams, raw: Bool?) -> Data {
+        (raw.map { BandWire.field(2, $0 ? 1 : 0) } ?? Data())
+            + BandWire.field(3, 1) + BandWire.field(6, motion.gyro ? 1 : 0) + BandWire.field(8, motion.orientation ? 1 : 0)
+    }
+
+    /// Asks for these motion streams. Before the subscription it only changes what
+    /// the subscription asks for. While another stream change is in flight it waits;
+    /// `flushMotion(at:)` sends it when the way is clear.
+    public func setMotionStreams(_ wanted: MotionStreams, at time: Double) throws -> Data {
+        guard !stopping else { return Data() }
+        motionAfterRestart = nil
+        wantedMotion = wanted
+        return try flushMotion(at: time)
+    }
+
+    /// Turns the motion streams off and, once the band confirms, on again.
+    public func restartMotionStreams(at time: Double) throws -> Data {
+        guard !stopping, streamsEnabled, motionAfterRestart == nil, motion != .none else { return Data() }
+        let restore = wantedMotion ?? motion
+        wantedMotion = MotionStreams.none
+        motionAfterRestart = restore
+        return try flushMotion(at: time)
+    }
+
+    /// Sends a waiting motion change if nothing else is in flight. Safe to call often.
+    public func flushMotion(at time: Double) throws -> Data {
+        // While a change is in flight, compare against nothing yet: it may still move `motion`.
+        guard !stopping, let wanted = wantedMotion, motionRequest == nil else { return Data() }
+        guard wanted != motion else { wantedMotion = nil; return Data() }
+        // The subscription has not gone out yet: it will simply ask for these.
+        guard setupStage == .input else { motion = wanted; wantedMotion = nil; return Data() }
+        guard streamsEnabled, rawRequest == nil, motionRequest == nil else { return Data() }
+        rawRequestID += 1
+        motionRequest = (rawRequestID, wanted, time)
+        return try encrypt(BandWire.frame(channel: streamChannel, words: [],
+            payload: BandWire.field(1, rawRequestID) + BandWire.field(4, streamControl(wanted, raw: rawRequested ? rawEMG : nil))))
     }
 
     public func setHandedness(_ hand: BandHand, at time: Double) throws -> Data {
@@ -423,8 +477,14 @@ public final class BandSession {
     }
 
     private func streamRequest(id: UInt64, enabled: Bool?) throws -> Data {
-        let selectedFields = enabled == false && rawRequested ? [2] + streamFields : streamFields
-        let control = enabled.map { enabled in selectedFields.reduce(into: Data()) { $0 += BandWire.field($1, enabled ? 1 : 0) } } ?? Data()
+        let control: Data
+        switch enabled {
+        case true?: control = streamControl(motion, raw: nil)
+        case false?:
+            // Stopping turns every stream off, whichever were on.
+            control = ((rawRequested ? [2] : []) + Self.allStreamFields).reduce(into: Data()) { $0 += BandWire.field($1, 0) }
+        case nil: control = Data()
+        }
         return try encrypt(BandWire.frame(channel: streamChannel, words: id == 2 ? [0x8100ce56, 0x02000314] : [],
             payload: BandWire.field(1, id) + BandWire.field(4, control)))
     }
@@ -561,6 +621,24 @@ public final class BandSession {
         if kind == 0x02000315 {
             let fields = try ProtoFields(frame.payload)
             let request = try fields.integer(1)
+            if let pending = motionRequest, request == pending.id {
+                motionRequest = nil
+                guard !stopping else { return [] }
+                guard try fields.integer(2) == 1, fields.contains(5) else {
+                    wantedMotion = nil
+                    motionAfterRestart = nil
+                    return [BandEvent(.motionStreams(motion, confirmedAfter: time - pending.sentAt, accepted: false), at: time)]
+                }
+                let flags = try ProtoFields(fields.bytes(5))
+                guard try flags.integer(3) == 1 else { throw BandProtocolError("The band input subscription stopped") }
+                motion = MotionStreams(gyro: try flags.integer(6) == 1, orientation: try flags.integer(8) == 1)
+                if motion == .none, let restore = motionAfterRestart {
+                    motionAfterRestart = nil
+                    wantedMotion = restore
+                    outgoing.append(try flushMotion(at: time))
+                }
+                return [BandEvent(.motionStreams(motion, confirmedAfter: time - pending.sentAt, accepted: motion == pending.wanted), at: time)]
+            }
             if request == 3 || request == 5 {
                 guard !stopping else { return [] }
                 guard try fields.integer(2) == 1 else {
@@ -578,7 +656,7 @@ public final class BandSession {
                 }
             } else if request == 4, try fields.integer(2) == 1, fields.contains(5) {
                 let flags = try ProtoFields(fields.bytes(5))
-                stopAcknowledged = try (rawRequested ? [2] + streamFields : streamFields).allSatisfy { try flags.contains($0) && flags.integer($0) == 0 }
+                stopAcknowledged = try ((rawRequested ? [2] : []) + Self.allStreamFields).allSatisfy { try flags.contains($0) && flags.integer($0) == 0 }
             }
             return []
         }

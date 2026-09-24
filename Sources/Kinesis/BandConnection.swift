@@ -25,9 +25,16 @@ protocol BandConnection: AnyObject {
     func stop()
     func setHandedness(_ hand: BandHand) throws
     func resumeCeremony(_ completion: CeremonyCompletion) throws
+    /// Which motion streams to keep on. Applied now if connected, or at the next subscription.
+    func setMotionStreams(_ streams: MotionStreams)
+    /// Turns the motion streams off and on again, to clear a backed-up stream.
+    func restartMotionStreams()
 }
 
 extension BandConnection {
+    func setMotionStreams(_ streams: MotionStreams) {}
+    func restartMotionStreams() {}
+
     /// Only the native connection runs an enrollment ceremony.
     func resumeCeremony(_ completion: CeremonyCompletion) throws {
         throw KinesisError(message: "This connection can't run an enrollment")
@@ -46,6 +53,7 @@ final class NativeBandConnection: NSObject, BandConnection,
     private var nextBatteryRead = 0.0
     private var nextBatteryStatusRead = 0.0
     private var rawEMGMode = false
+    private var motionMode = MotionStreams.all
     private var session: BandSession?
     private var onEvent: ((BandEvent) -> Void)?
     private var onEnd: ((Error?) -> Void)?
@@ -151,6 +159,24 @@ final class NativeBandConnection: NSObject, BandConnection,
         } catch { fail(error) }
     }
 
+    func setMotionStreams(_ streams: MotionStreams) {
+        motionMode = streams
+        guard let session, !stopping, !disconnecting else { return }
+        do {
+            outgoing.append(try session.setMotionStreams(streams, at: now))
+            try flushOutput()
+        } catch { fail(error) }
+    }
+
+    func restartMotionStreams() {
+        guard let session, !stopping, !disconnecting else { return }
+        log.notice("Restarting the motion streams to clear a backlog")
+        do {
+            outgoing.append(try session.restartMotionStreams(at: now))
+            try flushOutput()
+        } catch { fail(error) }
+    }
+
     func setRawEMGEnabled(_ enabled: Bool) throws {
         rawEMGMode = enabled
         if let session, !stopping, !disconnecting {
@@ -200,6 +226,8 @@ final class NativeBandConnection: NSObject, BandConnection,
             log.error("EMG subscription: \(message, privacy: .public)")
         case .rawEMGFrame:
             if session?.rawEMGFrames == 1 { log.notice("First EMG sensor payload received") }
+        case .motionStreams(let streams, let after, let accepted):
+            log.notice("Motion streams gyro \(streams.gyro, privacy: .public), orientation \(streams.orientation, privacy: .public); band answered after \(after, privacy: .public)s, as asked: \(accepted, privacy: .public)")
         default: break
         }
         onEvent?(event)
@@ -238,6 +266,7 @@ final class NativeBandConnection: NSObject, BandConnection,
         }
         if !stopping, let session {
             for event in session.tick(at: now) { emit(event) }
+            do { outgoing.append(try session.flushMotion(at: now)) } catch { fail(error); return }
             if session.streamsEnabled, now >= nextBatteryStatusRead {
                 nextBatteryStatusRead = now + 5
                 do {
@@ -414,13 +443,13 @@ final class NativeBandConnection: NSObject, BandConnection,
                 // A pairing-mode band runs the ownership ceremony with a fresh
                 // app identity; the enrolled startup takes over after it.
                 log.notice("Starting band ownership ceremony")
-                session = try BandSession(ceremony: OwnershipCeremony(bandID: identifier), rawEMG: rawEMGMode)
+                session = try BandSession(ceremony: OwnershipCeremony(bandID: identifier), rawEMG: rawEMGMode, motion: motionMode)
             } else {
                 // A stored identity authenticates enrolled bands; a band that
                 // rejected the identity falls back to the legacy startup.
                 let enrollment = identityRejected.contains(identifier) ? nil : BandIdentity.enrollment(for: identifier)
                 if enrollment != nil { log.notice("Authenticating with the stored band identity") }
-                session = try BandSession(enrollment: enrollment, rawEMG: rawEMGMode)
+                session = try BandSession(enrollment: enrollment, rawEMG: rawEMGMode, motion: motionMode)
             }
             self.session = session
             self.channel = channel
