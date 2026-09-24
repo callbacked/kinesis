@@ -14,7 +14,7 @@ struct CursorPage: View {
             OpenRow(title: "calibrate",
                     detail: model.pointerCalibrated
                         ? String(format: "fitted to your arm: %.0f° across, %.0f° up and down.", model.pointerReach.degreesAcrossWidth, model.pointerReach.degreesAcrossHeight)
-                        : "aim at three dots so the pointer fits how far your arm likes to move.") {
+                        : "aim at four dots so the pointer fits how far, and how slanted, your arm likes to move.") {
                 HStack(spacing: 14) {
                     if model.pointerCalibrated {
                         Button("reset") { model.resetPointerReach() }.buttonStyle(.plain)

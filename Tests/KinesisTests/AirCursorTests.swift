@@ -167,28 +167,48 @@ private struct Feed {
     #expect(slow.pointer.speed < PointerAcceleration.slowSpeed && fastest > PointerAcceleration.fastSpeed)
 }
 
-@Test func calibrationMeasuresEachAxisAndRejectsAimsThatDontFit() {
-    func run(_ center: ForearmAim, _ topLeft: ForearmAim, _ bottomRight: ForearmAim) -> (PointerReach?, String?) {
+@Test func calibrationMeasuresEachAxisAndItsSlantAndRejectsAimsThatDontFit() {
+    func run(left: (Double, Double), right: (Double, Double), top: (Double, Double), bottom: (Double, Double)) -> (PointerReach?, String?) {
         var calibration = PointerCalibration()
-        #expect(calibration.record(center) == nil && calibration.step == .topLeft)
-        #expect(calibration.record(topLeft) == nil && calibration.step == .bottomRight)
-        let reach = calibration.record(bottomRight)
+        #expect(calibration.record(ForearmAim(azimuth: left.0, elevation: left.1)) == nil && calibration.step == .right)
+        #expect(calibration.record(ForearmAim(azimuth: right.0, elevation: right.1)) == nil && calibration.step == .top)
+        #expect(calibration.record(ForearmAim(azimuth: top.0, elevation: top.1)) == nil && calibration.step == .bottom)
+        let reach = calibration.record(ForearmAim(azimuth: bottom.0, elevation: bottom.1))
         return (reach, calibration.problem)
     }
-    // 25.2° apart across and 12.6° apart up and down, at 70 % of the display.
-    let good = run(ForearmAim(azimuth: 90, elevation: 10), ForearmAim(azimuth: 102.6, elevation: 16.3), ForearmAim(azimuth: 77.4, elevation: 3.7))
-    #expect(good.1 == nil)
-    #expect(abs(good.0!.degreesAcrossWidth - 36) < 1e-9 && abs(good.0!.degreesAcrossHeight - 18) < 1e-9)
+    // 25.2° across and 12.6° up and down, 70 % of the display apart, with no slant.
+    let straight = run(left: (102.6, 10), right: (77.4, 10), top: (90, 16.3), bottom: (90, 3.7))
+    #expect(straight.1 == nil)
+    #expect(abs(straight.0!.degreesAcrossWidth - 36) < 1e-9 && abs(straight.0!.degreesAcrossHeight - 18) < 1e-9)
+    #expect(abs(straight.0!.upTilt) < 1e-9 && abs(straight.0!.acrossTilt) < 1e-9)
+    // Up drifts two degrees left over the 12.6° climb, as a right elbow does.
+    let slanted = run(left: (102.6, 10), right: (77.4, 10), top: (91, 16.3), bottom: (89, 3.7))
+    #expect(slanted.1 == nil && abs(slanted.0!.upTilt - 2 / 12.6) < 1e-9)
     // Across the compass seam it still measures the short way round.
-    let seam = run(ForearmAim(azimuth: 180, elevation: 10), ForearmAim(azimuth: -167.4, elevation: 16.3), ForearmAim(azimuth: 167.4, elevation: 3.7))
+    let seam = run(left: (-167.4, 10), right: (167.4, 10), top: (180, 16.3), bottom: (180, 3.7))
     #expect(seam.0 != nil && abs(seam.0!.degreesAcrossWidth - 36) < 1e-9)
-    let swapped = run(ForearmAim(azimuth: 90, elevation: 10), ForearmAim(azimuth: 77.4, elevation: 3.7), ForearmAim(azimuth: 102.6, elevation: 16.3))
+    let swapped = run(left: (77.4, 10), right: (102.6, 10), top: (90, 16.3), bottom: (90, 3.7))
     #expect(swapped.0 == nil && swapped.1?.contains("swapped") == true)
-    let tiny = run(ForearmAim(azimuth: 90, elevation: 10), ForearmAim(azimuth: 91, elevation: 10.5), ForearmAim(azimuth: 89, elevation: 9.5))
+    let tiny = run(left: (91, 10), right: (89, 10), top: (90, 10.5), bottom: (90, 9.5))
     #expect(tiny.0 == nil && tiny.1?.contains("small") == true)
-    let offCenter = run(ForearmAim(azimuth: 110, elevation: 10), ForearmAim(azimuth: 102.6, elevation: 16.3), ForearmAim(azimuth: 77.4, elevation: 3.7))
-    #expect(offCenter.0 == nil && offCenter.1?.contains("center") == true)
-    #expect(PointerReach.standard.isValid)
+    let steep = run(left: (102.6, 10), right: (77.4, 10), top: (100, 16.3), bottom: (80, 3.7))
+    #expect(steep.0 == nil && steep.1?.contains("slanted") == true)
+    let apart = run(left: (102.6, 10), right: (77.4, 10), top: (100, 26.3), bottom: (100, 13.7))
+    #expect(apart.0 == nil && apart.1?.contains("line up") == true)
+    #expect(PointerReach.standard(for: .right).isValid && PointerReach.standard(for: .left).upTilt == 0)
+}
+
+@Test func straighteningTurnsTheArmsNaturalLinesIntoScreenLines() {
+    let reach = PointerReach(degreesAcrossWidth: 60, degreesAcrossHeight: 30, upTilt: 0.23, acrossTilt: 0.03)
+    // Along the arm's natural up line: straight up on screen.
+    let up = reach.screenDegrees(SIMD2(0.23, 1))
+    #expect(abs(up.x) < 1e-9 && up.y < 0)
+    // Along its natural across line to the right: straight right.
+    let right = reach.screenDegrees(SIMD2(-1, 0.03))
+    #expect(abs(right.y) < 1e-9 && right.x > 0)
+    // Old saved calibrations decode with no slant.
+    let old = try? JSONDecoder().decode(PointerReach.self, from: Data(#"{"degreesAcrossWidth":64,"degreesAcrossHeight":31}"#.utf8))
+    #expect(old?.upTilt == 0 && old?.degreesAcrossWidth == 64)
 }
 
 @Test @MainActor func cursorCrossesDisplayBoundariesButStaysOutOfGaps() {

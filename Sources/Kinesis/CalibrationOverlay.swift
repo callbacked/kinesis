@@ -43,13 +43,14 @@ private struct CalibrationTargets: View {
     @State private var demo = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var step: PointerCalibration.Step { model.pointerCalibration?.step ?? .center }
+    private var step: PointerCalibration.Step { model.pointerCalibration?.step ?? .left }
 
     private var instruction: String {
         switch step {
-        case .center: "point your forearm at the dot, then pinch"
-        case .topLeft: "now the dot near the top left"
-        case .bottomRight: "last one, near the bottom right"
+        case .left: "point your forearm at the dot, then pinch"
+        case .right: "now the dot on the right"
+        case .top: "now the dot at the top"
+        case .bottom: "last one, at the bottom"
         }
     }
 
@@ -65,7 +66,7 @@ private struct CalibrationTargets: View {
                     HandView(scene: HandSceneView(hand: model.bandHand, highlight: .index, gesture: .tap(.indexTap),
                                                   revision: demo, viewpoint: .teaching, demonstrates: true))
                         .frame(width: 180, height: 140)
-                    Text("\(step.rawValue + 1) of 3").font(KinesisType.micro).foregroundStyle(.white.opacity(0.6))
+                    Text("\(step.rawValue + 1) of 4").font(KinesisType.micro).foregroundStyle(.white.opacity(0.6))
                     Text(instruction).font(.system(size: 22)).tracking(-0.5).foregroundStyle(.white)
                         .contentTransition(.opacity)
                     Text(model.pointerCalibrationProblem ?? "use small, comfortable turns, the way you’ll aim later. esc to stop.")
@@ -76,7 +77,7 @@ private struct CalibrationTargets: View {
                 .padding(28)
                 .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 22))
                 // Keep the panel away from whichever target is showing.
-                .position(x: geometry.size.width / 2, y: step == .bottomRight ? geometry.size.height * 0.3 : geometry.size.height * 0.68)
+                .position(x: geometry.size.width / 2, y: step == .bottom ? geometry.size.height * 0.33 : geometry.size.height * 0.66)
             }
         }
         .task {

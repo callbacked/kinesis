@@ -550,19 +550,19 @@ private func near(_ point: CGPoint, _ x: Double, _ y: Double) -> Bool { abs(poin
     let model = rig.model
     #expect(model.pointerCalibrated && model.pointerReach.degreesAcrossWidth == 40)
     model.resetPointerReach()
-    #expect(!model.pointerCalibrated && model.pointerReach == .standard)
+    #expect(!model.pointerCalibrated && model.pointerReach == .standard(for: .right))
     try await rig.aim(0)
     model.beginPointerCalibration()
-    #expect(model.pointerCalibration?.step == .center)
+    #expect(model.pointerCalibration?.step == .left)
     // Aim, pinch, and let the pinch nudge the arm two degrees before letting go.
-    for (azimuth, elevation) in [(0.0, 10.0), (14.0, 17.0), (-14.0, 3.0)] {
+    for (azimuth, elevation) in [(14.0, 10.0), (-14.0, 10.0), (0.0, 17.0), (0.0, 3.0)] {
         try await rig.aim(azimuth, elevation, for: 0.5)
         rig.gesture("index", "press")
         rig.gesture("index", "press", derived: "buttonHold")
         try await rig.aim(azimuth + 2, elevation - 2, for: 0.2)
         rig.gesture("index", "release")
     }
-    // 28° between the corners is 70 % of the width: 40° across. 14° is 70 % of 20° up and down.
+    // 28° between left and right is 70 % of the width: 40° across. 14° is 70 % of 20° up and down.
     #expect(model.pointerCalibration == nil && model.pointerCalibrated)
     #expect(abs(model.pointerReach.degreesAcrossWidth - 40) < 0.5 && abs(model.pointerReach.degreesAcrossHeight - 20) < 0.5)
     #expect(rig.controls.clicks.isEmpty && rig.controls.cursorMoves.isEmpty && rig.controls.actions.isEmpty)

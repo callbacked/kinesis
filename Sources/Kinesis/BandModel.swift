@@ -113,7 +113,7 @@ final class BandModel: ObservableObject {
     }
     var canUseAirCursor: Bool { developerMode && live && controlsEnabled && handConfirmed && pendingHand == nil }
     /// How far the forearm turns to cross the screen: measured by calibration, or the standard reach.
-    @Published private(set) var pointerReach = PointerReach.standard
+    @Published private(set) var pointerReach = PointerReach.standard(for: .right)
     @Published private(set) var pointerCalibrated = false
     /// Non-nil while the three calibration targets are on screen.
     @Published private(set) var pointerCalibration: PointerCalibration? {
@@ -687,10 +687,9 @@ final class BandModel: ObservableObject {
             return
         }
         guard let location = controls.cursorLocation else { return }
-        // Turning left raises the compass angle; raising the arm raises the elevation.
         // Stillness and acceleration are already in the movement, sample by sample.
         let scale = pointerReach.pointsPerDegree(display: controls.displaySize, sensitivity: cursorSensitivity)
-        let delta = SIMD2(-movement.x, -movement.y) * scale
+        let delta = pointerReach.screenDegrees(movement) * scale
         guard abs(delta.x) + abs(delta.y) >= 0.05 else { return }
         do {
             if cursorTrail.isEmpty { cursorTrail.append((now, location)) }
@@ -1296,7 +1295,7 @@ final class BandModel: ObservableObject {
     /// Orientation is half of the link's load, and only the air cursor, its
     /// calibration, and the readings page use it. The gyro stays on for the dial.
     var wantedMotionStreams: MotionStreams {
-        MotionStreams(gyro: true, orientation: airCursorEnabled || pointerCalibration != nil || readingsVisible)
+        MotionStreams(gyro: true, orientation: airCursorEnabled || pointerCalibration != nil || readingsVisible || MotionLog.shared.isOn)
     }
 
     private func updateMotionStreams() {
@@ -1313,7 +1312,7 @@ final class BandModel: ObservableObject {
 
     private func loadPointerReach() {
         let saved = defaults.data(forKey: pointerReachKey).flatMap { try? JSONDecoder().decode(PointerReach.self, from: $0) }
-        pointerReach = saved.flatMap { $0.isValid ? $0 : nil } ?? .standard
+        pointerReach = saved.flatMap { $0.isValid ? $0 : nil } ?? .standard(for: bandHand)
         pointerCalibrated = saved?.isValid == true
     }
 
@@ -1369,7 +1368,7 @@ final class BandModel: ObservableObject {
             pointerCalibrated = true
             if let data = try? JSONEncoder().encode(reach) { defaults.set(data, forKey: pointerReachKey) }
             lastAction = String(format: "Air cursor calibrated: %.0f° across, %.0f° up and down", reach.degreesAcrossWidth, reach.degreesAcrossHeight)
-            connectionLog.notice("Pointer calibrated: \(reach.degreesAcrossWidth, privacy: .public)° across, \(reach.degreesAcrossHeight, privacy: .public)° up and down")
+            connectionLog.notice("Pointer calibrated: \(reach.degreesAcrossWidth, privacy: .public)° across, \(reach.degreesAcrossHeight, privacy: .public)° up and down, up tilt \(reach.upTilt, privacy: .public), across tilt \(reach.acrossTilt, privacy: .public)")
         } else {
             pointerCalibration = calibration
         }

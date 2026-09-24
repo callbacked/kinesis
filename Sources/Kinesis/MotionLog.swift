@@ -7,6 +7,8 @@ import KinesisCore
 @MainActor final class MotionLog {
     static let shared = MotionLog(path: ProcessInfo.processInfo.environment["KINESIS_MOTION_LOG"])
     private let handle: FileHandle?
+    /// While logging, every stream stays on: an analysis needs orientation even with the cursor off.
+    var isOn: Bool { handle != nil }
 
     init(path: String?) {
         guard let path, !path.isEmpty else { handle = nil; return }

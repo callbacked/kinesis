@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import KinesisCore
 import simd
 
 /// Where the forearm points, from the band's orientation quaternion.
@@ -270,46 +271,87 @@ struct ArrivalDelay {
     }
 }
 
-/// How much forearm turn crosses the main display, left to right and top to bottom.
-/// Stored in degrees, not points, so it survives a change of display.
+/// How much forearm turn crosses the main display, left to right and top to bottom, and
+/// how slanted the arm's natural across and up lines are. Stored in degrees, not points,
+/// so it survives a change of display.
 struct PointerReach: Codable, Equatable {
     var degreesAcrossWidth: Double
     var degreesAcrossHeight: Double
+    /// Compass degrees per degree of elevation when the arm moves straight up. Positive
+    /// means up drifts left. On 2026-09-24 a right arm moving "straight up" drifted 13°
+    /// left, toward the body: an elbow doesn't hinge in a straight screen line.
+    var upTilt = 0.0
+    /// Elevation per compass degree when the arm moves straight to the right.
+    var acrossTilt = 0.0
 
-    /// The typical result of four calibrations on 2026-09-24, in two poses: 64° to 73°
-    /// across and 27° to 32° up and down. People reach less up and down than across.
-    static let standard = PointerReach(degreesAcrossWidth: 65, degreesAcrossHeight: 31)
+    /// Reach: the typical result of four calibrations on 2026-09-24, in two poses: 64°
+    /// to 73° across and 27° to 32° up and down. Tilt: a little under the 13° measured,
+    /// since arms differ. A left arm stays at zero until it has been measured.
+    static func standard(for hand: BandHand) -> PointerReach {
+        PointerReach(degreesAcrossWidth: 65, degreesAcrossHeight: 31, upTilt: hand == .right ? 0.18 : 0)
+    }
     static let limits = 5.0...90.0
+    static let tiltLimit = 0.6
 
-    var isValid: Bool { Self.limits.contains(degreesAcrossWidth) && Self.limits.contains(degreesAcrossHeight) }
+    var isValid: Bool {
+        Self.limits.contains(degreesAcrossWidth) && Self.limits.contains(degreesAcrossHeight)
+            && abs(upTilt) <= Self.tiltLimit && abs(acrossTilt) <= Self.tiltLimit && abs(1 + upTilt * acrossTilt) > 0.5
+    }
+
+    init(degreesAcrossWidth: Double, degreesAcrossHeight: Double, upTilt: Double = 0, acrossTilt: Double = 0) {
+        self.degreesAcrossWidth = degreesAcrossWidth
+        self.degreesAcrossHeight = degreesAcrossHeight
+        self.upTilt = upTilt
+        self.acrossTilt = acrossTilt
+    }
+
+    /// Calibrations saved before the tilt existed have none.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        degreesAcrossWidth = try container.decode(Double.self, forKey: .degreesAcrossWidth)
+        degreesAcrossHeight = try container.decode(Double.self, forKey: .degreesAcrossHeight)
+        upTilt = try container.decodeIfPresent(Double.self, forKey: .upTilt) ?? 0
+        acrossTilt = try container.decodeIfPresent(Double.self, forKey: .acrossTilt) ?? 0
+    }
+
+    /// Straightens an aim change (compass, positive left; elevation, positive up) into
+    /// degrees along the screen: right and down. A move along the arm's natural up
+    /// line comes out straight up, and one along its across line straight across.
+    func screenDegrees(_ aim: SIMD2<Double>) -> SIMD2<Double> {
+        let scale = 1 + upTilt * acrossTilt
+        let right = -(aim.x - upTilt * aim.y) / scale
+        let up = (acrossTilt * aim.x + aim.y) / scale
+        return SIMD2(right, -up)
+    }
 
     func pointsPerDegree(display: CGSize, sensitivity: Double) -> SIMD2<Double> {
         SIMD2(display.width / degreesAcrossWidth, display.height / degreesAcrossHeight) * sensitivity
     }
 }
 
-/// Three targets on the main display: the center, near the top left, and near the
-/// bottom right. The wearer aims at each and pinches. The two corners give the reach
-/// on each axis; the center checks that the corners were meant.
+/// Four targets on the main display: left, right, top, and bottom of the center. The
+/// wearer aims at each and pinches. Left to right gives the reach and slant across,
+/// top to bottom the reach and slant up and down, and the two midpoints must agree.
 struct PointerCalibration: Equatable {
-    enum Step: Int, CaseIterable { case center, topLeft, bottomRight }
+    enum Step: Int, CaseIterable { case left, right, top, bottom }
 
     /// Where each target sits, as a fraction of the display from its top left.
     static func position(of step: Step) -> CGPoint {
         switch step {
-        case .center: CGPoint(x: 0.5, y: 0.5)
-        case .topLeft: CGPoint(x: 0.15, y: 0.15)
-        case .bottomRight: CGPoint(x: 0.85, y: 0.85)
+        case .left: CGPoint(x: 0.15, y: 0.5)
+        case .right: CGPoint(x: 0.85, y: 0.5)
+        case .top: CGPoint(x: 0.5, y: 0.15)
+        case .bottom: CGPoint(x: 0.5, y: 0.85)
         }
     }
-    /// The corners are 70 % of the display apart on each axis.
+    /// Each pair is 70 % of the display apart.
     static let span = 0.7
 
-    private(set) var step = Step.center
+    private(set) var step = Step.left
     private(set) var aims: [ForearmAim] = []
     private(set) var problem: String?
 
-    /// Records the aim for the current step. Returns the reach once all three are in.
+    /// Records the aim for the current step. Returns the reach once all four are in.
     mutating func record(_ aim: ForearmAim) -> PointerReach? {
         problem = nil
         aims.append(aim)
@@ -319,26 +361,35 @@ struct PointerCalibration: Equatable {
     }
 
     private mutating func finish() -> PointerReach? {
-        let center = aims[0], topLeft = aims[1], bottomRight = aims[2]
-        // The top left is to the left (a larger compass angle) and higher.
-        let across = remainder(topLeft.azimuth - bottomRight.azimuth, 360)
-        let down = topLeft.elevation - bottomRight.elevation
-        let reach = PointerReach(degreesAcrossWidth: across / Self.span, degreesAcrossHeight: down / Self.span)
-        // The center should sit near the middle of the two corners.
-        let middle = ForearmAim(azimuth: bottomRight.azimuth + across / 2, elevation: bottomRight.elevation + down / 2)
-        let offCenter = SIMD2(remainder(center.azimuth - middle.azimuth, 360) / max(across, 1),
-                              (center.elevation - middle.elevation) / max(down, 1))
-        if across <= 0 || down <= 0 {
-            problem = "the corners came out swapped. point at each target before you pinch."
-        } else if !reach.isValid {
-            problem = reach.degreesAcrossWidth < PointerReach.limits.lowerBound || reach.degreesAcrossHeight < PointerReach.limits.lowerBound
-                ? "that was a very small movement. point your forearm at each target, not just your hand."
-                : "that was a very large movement. aim at the targets with small, comfortable turns."
-        } else if abs(offCenter.x) > 0.3 || abs(offCenter.y) > 0.3 {
-            problem = "the center didn’t line up with the corners. hold your arm the same way for all three."
+        let left = aims[0], right = aims[1], top = aims[2], bottom = aims[3]
+        // Aim changes, compass first (positive is left) and elevation second.
+        let across = SIMD2(remainder(right.azimuth - left.azimuth, 360), right.elevation - left.elevation)
+        let upward = SIMD2(remainder(top.azimuth - bottom.azimuth, 360), top.elevation - bottom.elevation)
+        var reach: PointerReach?
+        if across.x >= 0 || upward.y <= 0 {
+            problem = "the targets came out swapped. point at each target before you pinch."
+        } else {
+            let found = PointerReach(degreesAcrossWidth: simd_length(across) / Self.span,
+                                     degreesAcrossHeight: simd_length(upward) / Self.span,
+                                     upTilt: upward.x / upward.y, acrossTilt: across.y / -across.x)
+            // Both pairs straddle the center, so their midpoints should be close.
+            let middleAcross = SIMD2(left.azimuth + across.x / 2, left.elevation + across.y / 2)
+            let middleUp = SIMD2(bottom.azimuth + upward.x / 2, bottom.elevation + upward.y / 2)
+            let apart = SIMD2(remainder(middleAcross.x - middleUp.x, 360) / -across.x, (middleAcross.y - middleUp.y) / upward.y)
+            if found.degreesAcrossWidth < PointerReach.limits.lowerBound || found.degreesAcrossHeight < PointerReach.limits.lowerBound {
+                problem = "that was a very small movement. point your forearm at each target, not just your hand."
+            } else if found.degreesAcrossWidth > PointerReach.limits.upperBound || found.degreesAcrossHeight > PointerReach.limits.upperBound {
+                problem = "that was a very large movement. aim at the targets with small, comfortable turns."
+            } else if !found.isValid {
+                problem = "those moves were very slanted. keep your arm in one comfortable pose and aim again."
+            } else if abs(apart.x) > 0.3 || abs(apart.y) > 0.3 {
+                problem = "the two pairs didn’t line up. hold your arm the same way for all four."
+            } else {
+                reach = found
+            }
         }
-        guard problem == nil else {
-            step = .center
+        guard let reach else {
+            step = .left
             aims = []
             return nil
         }
