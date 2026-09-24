@@ -10,44 +10,57 @@ struct CursorPage: View {
         return width / model.cursorSpeed
     }
 
+    private var leversChanged: Bool {
+        model.cursorSpeed != PointerReach.standardSpeed || abs(model.cursorFlickBoost - PointerAcceleration.fastFactor) > 0.01
+            || abs(model.cursorSteadiness - BandModel.standardSteadiness) > 0.01
+    }
+
+    private var status: String? {
+        if model.cursorRepositioning { return "parked · let go of Option" }
+        if model.airCursorEnabled { return "pinch to click · hold to drag · middle pinch to right-click · esc to stop" }
+        return model.canUseAirCursor ? nil : "connect your band and turn on controls"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
             Text("a little room to move.").font(KinesisType.title).tracking(-1.2)
-            OpenRow(title: "air cursor", detail: "experimental · move your forearm like a mouse.") {
+            OpenRow(title: "air cursor", detail: "experimental") {
                 Toggle("Air cursor", isOn: Binding(get: { model.airCursorEnabled }, set: { model.setAirCursorEnabled($0) }))
                     .toggleStyle(KinesisToggleStyle())
                     .disabled(!model.airCursorEnabled && !model.canUseAirCursor)
             }
-            Text(model.cursorRepositioning ? "pointer parked · release Option when your arm feels comfortable."
-                 : model.airCursorEnabled ? "pinch your index to click, or hold the pinch and move to drag. middle pinch to right-click. Escape to stop."
-                 : model.canUseAirCursor ? "turn it on, then move your forearm. slow for small moves, a quick flick to cross the screen. rest your elbow if you like."
-                 : "connect your band and enable Mac controls to try it.")
-                .font(KinesisType.body).foregroundStyle(KinesisStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if let status {
+                Text(status).font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
+            }
             ArmMirror(model: model)
 
-            Lever(title: "speed", value: String(format: "%.0f° of turn crosses this screen", degreesAcross),
-                  detail: "how far the pointer moves when you turn your arm.", slower: "slower", faster: "faster") {
+            Lever(title: "speed", value: String(format: "%.0f° across this screen", degreesAcross), slower: "slower", faster: "faster",
+                  changed: model.cursorSpeed != PointerReach.standardSpeed, reset: { model.cursorSpeed = PointerReach.standardSpeed }) {
                 PillSlider(value: $model.cursorSpeed, range: PointerReach.speeds, step: 5, label: "Pointer speed")
             }
-            Lever(title: "flick boost", value: String(format: "%.1f×", model.cursorFlickBoost),
-                  detail: "how much quick moves speed up. less is easier to predict.", slower: "even", faster: "more boost") {
+            Lever(title: "flick boost", value: String(format: "%.1f×", model.cursorFlickBoost), slower: "even", faster: "more boost",
+                  changed: abs(model.cursorFlickBoost - PointerAcceleration.fastFactor) > 0.01,
+                  reset: { model.cursorFlickBoost = PointerAcceleration.fastFactor }) {
                 PillSlider(value: $model.cursorFlickBoost, range: PointerAcceleration.flickBoosts, step: 0.1, label: "Flick boost")
             }
             HStack(alignment: .top, spacing: 22) {
-                Lever(title: "steadiness", value: nil, detail: "how much small movement the pointer ignores.",
-                      slower: "more responsive", faster: "more steady") {
+                Lever(title: "steadiness", value: nil, slower: "more responsive", faster: "more steady",
+                      changed: abs(model.cursorSteadiness - BandModel.standardSteadiness) > 0.01,
+                      reset: { model.cursorSteadiness = BandModel.standardSteadiness }) {
                     PillSlider(value: $model.cursorSteadiness, range: 0...1, step: 0.1, label: "Cursor steadiness")
                 }
-                WobbleRing(wobble: model.cursorWobble, still: AirPointer.still(steadiness: model.cursorSteadiness),
-                           live: model.live)
+                StillnessRing(speed: model.cursorArmSpeed, still: AirPointer.still(steadiness: model.cursorSteadiness),
+                              live: model.live)
             }
-            TryItRow(done: model.cursorSkills, active: model.airCursorEnabled)
+            TryItRow(done: model.cursorSkills)
+            if leversChanged {
+                Button("reset all") { model.resetCursorLevers() }
+                    .buttonStyle(KinesisButtonStyle())
+            }
 
             #if KINESIS_LAB
             OpenRow(title: "calibrate", detail: model.pointerCalibrated
-                        ? String(format: "lab build · fitted to your arm: %.0f points a degree, up tilt %.2f.", model.cursorSpeed, model.pointerReach.upTilt)
-                        : "lab build · aim at four dots to measure speed and slant for your arm.") {
+                        ? String(format: "lab · %.0f pt/°, tilt %.2f", model.cursorSpeed, model.pointerReach.upTilt) : "lab") {
                 HStack(spacing: 14) {
                     if model.pointerCalibrated {
                         Button("reset") {
@@ -61,18 +74,14 @@ struct CursorPage: View {
                         .disabled(!model.canUseAirCursor || model.pointerCalibration != nil)
                 }
             }
-            OpenRow(title: "lab", detail: "lab build · practice targets full screen. each run is saved for review.") {
+            OpenRow(title: "practice", detail: "lab") {
                 Button("open") { PracticeWindow.shared.open(model: model) }
                     .buttonStyle(KinesisButtonStyle())
             }
             #endif
 
-            Text("hold Option to move your arm without moving the pointer. a click lands where the pointer is.")
+            Text("hold Option to move your arm without moving the pointer.")
                 .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("thumb swipes keep your gesture shortcuts. cursor mode turns off when you pause or disconnect.")
-                .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { model.setCursorPageVisible(true) }
         .onDisappear { model.setCursorPageVisible(false) }
@@ -95,23 +104,15 @@ private struct ArmMirror: View {
     }
 
     var body: some View {
-        HStack(spacing: 20) {
-            HandView(scene: HandSceneView(hand: model.bandHand,
-                                          highlight: model.pinchedFinger.map { $0 == "middle" ? .middle : .index } ?? .none,
-                                          sustained: model.pinchedFinger != nil, aim: turned))
-                .frame(width: 170, height: 150)
-                .background {
-                    Circle().fill(RadialGradient(colors: [KinesisStyle.pool, .clear], center: .center, startRadius: 20, endRadius: 90))
-                        .opacity(scheme == .dark ? 1 : 0)
-                }
-            VStack(alignment: .leading, spacing: 6) {
-                Text("your arm, live").font(KinesisType.body)
-                Text(model.cursorAim == nil ? "connect your band to see the hand follow your arm."
-                     : "the hand follows your forearm. the pointer moves with your forearm, and twisting your wrist never moves it.")
-                    .font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        HandView(scene: HandSceneView(hand: model.bandHand,
+                                      highlight: model.pinchedFinger.map { $0 == "middle" ? .middle : .index } ?? .none,
+                                      sustained: model.pinchedFinger != nil, aim: turned))
+            .frame(width: 220, height: 180)
+            .background {
+                Circle().fill(RadialGradient(colors: [KinesisStyle.pool, .clear], center: .center, startRadius: 20, endRadius: 110))
+                    .opacity(scheme == .dark ? 1 : 0)
             }
-        }
+            .frame(maxWidth: .infinity)
         .onChange(of: model.cursorAim) { _, aim in
             guard let aim else { rest = nil; return }
             guard var next = rest else { rest = aim; return }
@@ -125,24 +126,27 @@ private struct ArmMirror: View {
     }
 }
 
-/// One setting: its name and value, one sentence on what it does, and its control.
+/// One setting: its name, its value, and its control.
 private struct Lever<Control: View>: View {
     let title: String
     let value: String?
-    let detail: String
     let slower: String
     let faster: String
+    var changed = false
+    var reset: () -> Void = {}
     @ViewBuilder var control: Control
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title).font(KinesisType.body)
+                if changed {
+                    Button("reset", action: reset).buttonStyle(.plain)
+                        .font(KinesisType.caption).foregroundStyle(KinesisStyle.accent)
+                }
                 Spacer()
                 if let value { Text(value).font(KinesisType.label).monospacedDigit().foregroundStyle(KinesisStyle.secondary) }
             }
-            Text(detail).font(KinesisType.caption).foregroundStyle(KinesisStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             control
             HStack {
                 Text(slower)
@@ -154,54 +158,41 @@ private struct Lever<Control: View>: View {
     }
 }
 
-/// The arm's live turn rate as a dot, and the stillness threshold as a ring. Inside
-/// the ring, the pointer holds still. Moving the steadiness lever grows the ring.
-private struct WobbleRing: View {
-    let wobble: SIMD2<Double>
+/// The arm's live speed as a disk, and the stillness threshold as a ring. While the
+/// disk stays inside the ring, the pointer holds still. Steadiness grows the ring.
+private struct StillnessRing: View {
+    let speed: Double
     let still: ClosedRange<Double>
     let live: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Degrees a second at the edge of the drawing.
     private let scale = 3.0
+    private let size = 96.0
+
+    private func diameter(_ degrees: Double) -> Double { min(1, degrees / scale) * (size - 6) }
 
     var body: some View {
-        VStack(spacing: 8) {
-            Canvas { context, size in
-                let radius = min(size.width, size.height) / 2 - 3
-                let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                func circle(_ r: Double) -> Path {
-                    Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r))
-                }
-                context.stroke(circle(radius), with: .color(KinesisStyle.line), lineWidth: 1)
-                let inner = min(1, still.lowerBound / scale) * radius
-                let outer = min(1, still.upperBound / scale) * radius
-                context.fill(circle(inner), with: .color(KinesisStyle.accent.opacity(0.14)))
-                context.stroke(circle(inner), with: .color(KinesisStyle.accent.opacity(0.7)), lineWidth: 1.5)
-                context.stroke(circle(outer), with: .color(KinesisStyle.accent.opacity(0.25)),
-                               style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                guard live else { return }
-                var offset = wobble / scale * radius
-                let length = (offset.x * offset.x + offset.y * offset.y).squareRoot()
-                if length > radius { offset *= radius / length }
-                let moving = (wobble.x * wobble.x + wobble.y * wobble.y).squareRoot() > still.lowerBound
-                let dot = CGPoint(x: center.x + offset.x, y: center.y - offset.y)
-                context.fill(Path(ellipseIn: CGRect(x: dot.x - 4, y: dot.y - 4, width: 8, height: 8)),
-                             with: .color(moving ? KinesisStyle.ink : KinesisStyle.accent))
+        let moving = speed > still.lowerBound
+        ZStack {
+            Circle().stroke(KinesisStyle.line, lineWidth: 1).frame(width: size - 6, height: size - 6)
+            if live {
+                Circle().fill(moving ? KinesisStyle.ink.opacity(0.18) : KinesisStyle.accent.opacity(0.22))
+                    .frame(width: max(6, diameter(speed)), height: max(6, diameter(speed)))
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: speed)
             }
-            .frame(width: 96, height: 96)
-            Text(live ? "your arm now. inside the ring the pointer holds still." : "connect your band to see your arm.")
-                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
-                .multilineTextAlignment(.center).frame(width: 130)
-                .fixedSize(horizontal: false, vertical: true)
+            Circle().stroke(KinesisStyle.accent.opacity(0.8), lineWidth: 1.5)
+                .frame(width: diameter(still.lowerBound), height: diameter(still.lowerBound))
         }
+        .frame(width: size, height: size)
+        .animation(reduceMotion ? nil : KinesisMotion.settle, value: still.lowerBound)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Live arm movement against the steadiness threshold")
+        .accessibilityLabel(moving ? "Your arm is moving the pointer" : "Your arm is inside the stillness threshold")
     }
 }
 
 /// The pointer's actions as words that light up once done with the air cursor.
 private struct TryItRow: View {
     let done: Set<BandModel.CursorSkill>
-    let active: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let skills: [(BandModel.CursorSkill, String)] = [(.click, "click"), (.rightClick, "right-click"),
@@ -224,8 +215,6 @@ private struct TryItRow: View {
                     .animation(reduceMotion ? nil : KinesisMotion.settle, value: isDone)
                 }
             }
-            Text(active ? "each one lights up when you do it with the air cursor." : "turn on the air cursor, then try each one here.")
-                .font(KinesisType.micro).foregroundStyle(KinesisStyle.secondary)
         }
     }
 }

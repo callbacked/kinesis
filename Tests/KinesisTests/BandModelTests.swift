@@ -1945,3 +1945,17 @@ private struct FakePairClient: BandPairClient {
     let fresh = BandModel(defaults: MemoryDefaults(), connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
     #expect(fresh.cursorSpeed == PointerReach.standardSpeed && fresh.cursorFlickBoost == PointerAcceleration.fastFactor)
 }
+
+@Test @MainActor func resetAllPutsTheLeversBackAndKeepsTheCalibration() {
+    let defaults = MemoryDefaults()
+    let reach = PointerReach(degreesAcrossWidth: 70, degreesAcrossHeight: 30, upTilt: 0.2)
+    defaults.set(try? JSONEncoder().encode(reach), forKey: "pointerReach..right")
+    let model = BandModel(defaults: defaults, connection: RecordedConnection(), sessionStore: SavedSessionStore(), clock: { 100 })
+    model.cursorSpeed = 80
+    model.cursorFlickBoost = 2.3
+    model.cursorSteadiness = 0.9
+    model.resetCursorLevers()
+    #expect(model.cursorSpeed == PointerReach.standardSpeed && model.cursorFlickBoost == PointerAcceleration.fastFactor)
+    #expect(model.cursorSteadiness == BandModel.standardSteadiness && model.airPointer.tuning.fastFactor == PointerAcceleration.fastFactor)
+    #expect(defaults.data(forKey: "pointerReach..right") != nil)
+}

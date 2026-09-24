@@ -107,8 +107,6 @@ struct AirPointer {
     private var lastGyroTime: Double?
     /// Degrees per second the aim is turning, from the gyro, without wrist twist.
     private(set) var speed = 0.0
-    /// The same turn as a direction: the gyro's two axes other than the forearm, smoothed alike.
-    private(set) var turn = SIMD2<Double>.zero
     /// The last 200 ms of speed, to tell settling onto a target from tracking one.
     private var recentSpeeds: [(time: Double, speed: Double)] = []
 
@@ -218,7 +216,6 @@ struct AirPointer {
         // Body +y is the forearm, so a rate around y is a twist, which never moves the pointer.
         let rate = (corrected.x * corrected.x + corrected.z * corrected.z).squareRoot()
         speed += (rate - speed) * (1 - exp(-dt / 0.1))
-        turn += (SIMD2(corrected.x, corrected.z) - turn) * (1 - exp(-dt / 0.1))
         accelerationSpeed += (rate - accelerationSpeed) * (1 - exp(-dt / tuning.accelerationSeconds))
         gateSpeed = max(speed, gateSpeed * exp(-dt / 0.15))
         recentSpeeds.append((time, speed))

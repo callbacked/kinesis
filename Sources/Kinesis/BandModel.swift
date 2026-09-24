@@ -104,9 +104,10 @@ final class BandModel: ObservableObject {
     @Published private(set) var cursorPageVisible = false {
         didSet { if cursorPageVisible != oldValue { updateMotionStreams() } }
     }
-    /// While the cursor page is open, 20 times a second: how the arm is turning, in
-    /// degrees a second, with the length the stillness gate judges.
-    @Published private(set) var cursorWobble = SIMD2<Double>.zero
+    /// While the cursor page is open, 20 times a second: how fast the arm turns, in
+    /// degrees a second, smoothed over a quarter second so the picture stays calm.
+    @Published private(set) var cursorArmSpeed = 0.0
+    private var calmArmSpeed = 0.0
     /// While the cursor page is open, 20 times a second: where the forearm points.
     @Published private(set) var cursorAim: ForearmAim?
     private var cursorLiveAt = (wobble: -Double.infinity, aim: -Double.infinity)
@@ -124,7 +125,8 @@ final class BandModel: ObservableObject {
             airPointer.tuning.fastFactor = cursorFlickBoost
         }
     }
-    @Published var cursorSteadiness = 0.5 {
+    static let standardSteadiness = 0.5
+    @Published var cursorSteadiness = standardSteadiness {
         didSet {
             defaults.set(cursorSteadiness, forKey: "pointerStillness")
             airPointer.steadiness = cursorSteadiness
@@ -1252,11 +1254,12 @@ final class BandModel: ObservableObject {
         case .gyro(let timestamp, let values):
             let delay = measureLinkDelay(band: timestamp, host: event.receivedAt)
             if delay <= Self.lateInput { airPointer.receiveGyro(values, at: event.receivedAt - delay) }
-            if cursorPageVisible, event.receivedAt - cursorLiveAt.wobble >= 0.05 {
-                let turn = airPointer.turn
-                let length = (turn.x * turn.x + turn.y * turn.y).squareRoot()
-                cursorWobble = length > 0 ? turn / length * airPointer.speed : .zero
-                cursorLiveAt.wobble = event.receivedAt
+            if cursorPageVisible {
+                calmArmSpeed += (airPointer.speed - calmArmSpeed) * (1 - exp(-(1.0 / 128) / 0.25))
+                if event.receivedAt - cursorLiveAt.wobble >= 0.05 {
+                    cursorArmSpeed = calmArmSpeed
+                    cursorLiveAt.wobble = event.receivedAt
+                }
             }
             if developerMode { motion.receiveGyro(values, at: event.receivedAt) }
         }
@@ -1403,6 +1406,13 @@ final class BandModel: ObservableObject {
 
     func setReadingsVisible(_ visible: Bool) {
         readingsVisible = visible
+    }
+
+    /// Puts speed, flick boost, and steadiness back to their defaults. Calibration's slant stays.
+    func resetCursorLevers() {
+        cursorSpeed = PointerReach.standardSpeed
+        cursorFlickBoost = PointerAcceleration.fastFactor
+        cursorSteadiness = Self.standardSteadiness
     }
 
     func setCursorPageVisible(_ visible: Bool) {
