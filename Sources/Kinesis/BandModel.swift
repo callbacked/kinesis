@@ -139,7 +139,11 @@ final class BandModel: ObservableObject {
     /// Two presses this close in time and space are a double-click, as with a trackpad.
     static let doubleClickTime = 0.45
     static let doubleClickDistance = 6.0
-    private var cursorTicker: AnyCancellable?
+    private var cursorTicker: FrameTicker?
+    private var cursorPacer: PointerPacer
+    /// Tests run the pointer on a 60 Hz timer that their fake clock is written around.
+    private let cursorFramesFromDisplay: Bool
+    private var cursorLastFrame: Double?
     /// True while the band's data reaches the Mac late: a congested or blocked radio link.
     @Published private(set) var linkCongested = false
     /// Input later than this is never acted on: no click, shortcut, dial step, or pointer move.
@@ -321,8 +325,12 @@ final class BandModel: ObservableObject {
          workspaceNotifications: NotificationCenter = NSWorkspace.shared.notificationCenter,
          pairClient: @escaping @Sendable (MetaSession) -> any BandPairClient = { MetaPairClient(session: $0) },
          sessionStore: any MetaSessionStoring = MetaSessionStore(),
-         clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
+         clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
+         cursorPacing: Double = PointerPacer.batchSeconds,
+         cursorFramesFromDisplay: Bool = true) {
         self.clock = clock
+        cursorPacer = PointerPacer(seconds: cursorPacing)
+        self.cursorFramesFromDisplay = cursorFramesFromDisplay
         self.defaults = defaults
         self.started = clock()
         self.metricsAt = clock()
@@ -641,11 +649,13 @@ final class BandModel: ObservableObject {
         cursorNeedsAnchor = true
         cursorTrail = []
         cursorMotionResumesAt = -.infinity
-        cursorTicker?.cancel()
+        cursorTicker?.stop()
         cursorTicker = nil
+        cursorPacer.clear()
+        cursorLastFrame = nil
         if enabled {
             // One move per display frame. The orientation arrives at 128 Hz.
-            cursorTicker = Timer.publish(every: 1.0 / 60, on: .main, in: .common).autoconnect().sink { [weak self] _ in
+            cursorTicker = FrameTicker(fromDisplay: cursorFramesFromDisplay, timerInterval: cursorFramesFromDisplay ? 1.0 / 120 : 1.0 / 60) { [weak self] in
                 self?.flushCursorMovement()
             }
         }
@@ -670,23 +680,26 @@ final class BandModel: ObservableObject {
         steadyCursor(until: clock() + 0.12)
     }
 
-    private func flushCursorMovement() {
+    /// Posts this frame's share of the movement, or all of it before a press.
+    private func flushCursorMovement(all: Bool = false) {
         let now = clock()
-        guard airCursorEnabled, canUseAirCursor, now - cursorLastOrientation <= 0.15 else { return }
+        let frame = cursorLastFrame.map { max(0, min(0.1, now - $0)) } ?? 0
+        cursorLastFrame = now
+        guard airCursorEnabled, canUseAirCursor, now - cursorLastOrientation <= 0.15 else { cursorPacer.clear(); return }
         guard controls.trusted else { pause(); return }
         guard let movement = airPointer.movement() else { return }
         // A pinch, Option, or the first frame drops what moved meanwhile, like lifting
         // a mouse. The first frame after a hold drops the settling that came with it.
-        guard !cursorRepositioning, now >= cursorMotionResumesAt else { return }
-        guard !cursorNeedsAnchor else {
-            cursorNeedsAnchor = false
+        guard !cursorRepositioning, now >= cursorMotionResumesAt, !cursorNeedsAnchor else {
+            if !cursorRepositioning, now >= cursorMotionResumesAt { cursorNeedsAnchor = false }
+            cursorPacer.clear()
             return
         }
-        guard let location = controls.cursorLocation else { return }
         // Stillness and acceleration are already in the movement, sample by sample.
         let scale = pointerReach.pointsPerDegree(display: controls.displaySize, sensitivity: cursorSensitivity)
-        let delta = pointerReach.screenDegrees(movement) * scale
-        guard abs(delta.x) + abs(delta.y) >= 0.05 else { return }
+        let moved = pointerReach.screenDegrees(movement) * scale
+        cursorPacer.add(moved)
+        guard let location = controls.cursorLocation, let delta = cursorPacer.take(frame: all ? nil : frame) else { return }
         do {
             if cursorTrail.isEmpty { cursorTrail.append((now, location)) }
             let posted = try controls.moveCursor(to: CGPoint(x: location.x + delta.x, y: location.y + delta.y),
@@ -1211,7 +1224,7 @@ final class BandModel: ObservableObject {
               !actions.contains("buttonHold"), cursorPressedFingers.insert(message.finger).inserted else { return }
         guard controls.trusted else { pause(); return }
         // Movement from before the pinch lands before the press, not after it.
-        flushCursorMovement()
+        flushCursorMovement(all: true)
         // Held still or settling onto a target: absorb the drift that follows the pinch.
         // Tracking something that moves: hold nothing back.
         let approach = airPointer.approach

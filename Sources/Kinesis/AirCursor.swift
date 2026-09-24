@@ -254,6 +254,40 @@ struct AirPointer {
     }
 }
 
+/// Spreads the pointer's movement evenly over the display's frames. The band's
+/// samples arrive in batches every 15 ms, sometimes 30 ms (measured 2026-09-24), so
+/// posting each frame whatever arrived gave some frames two batches and some none,
+/// which looked choppy. Each frame takes a share of what is waiting instead, draining
+/// it over about one batch's time.
+struct PointerPacer {
+    static let batchSeconds = 0.016
+    /// 0 posts everything at once.
+    var seconds: Double
+    private var waiting = SIMD2<Double>.zero
+
+    init(seconds: Double) {
+        self.seconds = seconds
+    }
+
+    mutating func add(_ points: SIMD2<Double>) {
+        waiting += points
+    }
+
+    /// The points to post this frame, or nil when the share is too small to move.
+    /// A nil frame takes everything, as before a press.
+    mutating func take(frame: Double?) -> SIMD2<Double>? {
+        let share = frame.map { seconds > 0 ? 1 - exp(-$0 / seconds) : 1 } ?? 1
+        let step = waiting * share
+        guard abs(step.x) + abs(step.y) >= 0.05 else { return nil }
+        waiting -= step
+        return step
+    }
+
+    mutating func clear() {
+        waiting = .zero
+    }
+}
+
 /// Pointer acceleration: slow aiming moves the pointer less, for precision, and a
 /// quick flick moves it more, for distance. Slow moves once ran at 0.35 and felt
 /// numb; careful moves measured 1.2 to 1.8°/s and flicks over 30°/s.

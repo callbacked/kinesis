@@ -231,3 +231,29 @@ private struct Feed {
         #expect(down.location == position && down.getIntegerValueField(.mouseEventClickState) == 2)
     }
 }
+
+@Test func thePacerSpreadsBatchesEvenlyOverFrames() {
+    // Two samples every 15 ms, shown on a 100 Hz display.
+    var pacer = PointerPacer(seconds: PointerPacer.batchSeconds)
+    var steps: [Double] = []
+    for frame in 0..<60 {
+        if frame % 3 != 1 { pacer.add(SIMD2(frame % 3 == 0 ? 3 : 0, 0)) }
+        steps.append(pacer.take(frame: 0.01)?.x ?? 0)
+    }
+    // Posted as it arrived, frames would move 3, 0 and 0 points: choppy.
+    let settled = steps.suffix(30)
+    #expect(settled.allSatisfy { $0 > 0.4 && $0 < 1.8 })
+    #expect(abs(steps.reduce(0, +) - 60) < 2)
+    // Before a press everything waiting goes at once.
+    pacer.add(SIMD2(5, 0))
+    let rest = pacer.take(frame: nil)
+    #expect(rest != nil && pacer.take(frame: 0.01) == nil)
+}
+
+@Test func thePacerWithNoPacingPostsEverything() {
+    var pacer = PointerPacer(seconds: 0)
+    pacer.add(SIMD2(4, -2))
+    #expect(pacer.take(frame: 0) == SIMD2(4, -2))
+    pacer.add(SIMD2(0.01, 0))
+    #expect(pacer.take(frame: 0.01) == nil)
+}

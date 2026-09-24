@@ -291,7 +291,7 @@ import KinesisCore
                      forKey: "pointerReach.cursor-test-band.right")
         let clock = clock
         model = BandModel(defaults: defaults, connection: connection, controls: controls,
-                          sessionStore: SavedSessionStore(), clock: { clock.now })
+                          sessionStore: SavedSessionStore(), clock: { clock.now }, cursorPacing: 0, cursorFramesFromDisplay: false)
         model.selectedAddress = "cursor-test-band"
         model.developerMode = true
         // The smallest dead zone, 0.1°: 4 points. The dead zone has its own tests.
