@@ -19,6 +19,14 @@ struct ReadingsPage: View {
                 Spacer()
                 SectionLabel(text: "developer")
             }.reveal(0)
+            #if KINESIS_DEV
+            HandwritingTestRow(model: model)
+            OpenRow(title: "trackpad recording", detail: "guided movements with muscle signals, measured touches, and the band’s model output.") {
+                Button("record trackpad") { TrackpadWindow.shared.open(model: model) }
+                    .buttonStyle(KinesisButtonStyle())
+                    .disabled(!model.live)
+            }
+            #endif
             OpenRow(title: "live EMG", detail: status) {
                 Toggle("Live EMG", isOn: $model.rawEMGEnabled).toggleStyle(KinesisToggleStyle())
                     .disabled(!model.live || model.rawEMGChanging)

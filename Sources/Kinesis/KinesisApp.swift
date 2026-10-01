@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if KINESIS_DEV
         calibrationOverlay = CalibrationOverlay(model: model)
+        PassiveRecorder.shared.attach(model)
         #endif
         HandwritingSession.shared.install(model)
         // Local monitors cover Kinesis; global monitors cover whichever app the
@@ -33,16 +34,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != MacShortcuts.shortcutEventTag else { return }
         #if KINESIS_DEV
         // Escape in the practice lab ends a run. It must not turn the cursor off too.
-        if event.type == .keyDown, PracticeWindow.shared.owns(event) { return }
+        if event.type == .keyDown, PracticeWindow.shared.owns(event) || TrackpadWindow.shared.owns(event)
+            || TrackpadPreviewWindow.shared.owns(event) || RaiseWindow.shared.owns(event) { return }
         #endif
-        if event.type == .keyDown, event.keyCode == 53 { model.setAirCursorEnabled(false) }
+        if event.type == .keyDown, event.keyCode == 53 {
+            model.setAirCursorEnabled(false)
+            #if KINESIS_DEV
+            FingerCursor.shared.stop()
+            #endif
+        }
         model.setCursorRepositioning(event.modifierFlags.contains(.option))
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         #if KINESIS_DEV
-        // A run in progress saves what it has.
+        // A run or a recording in progress saves what it has.
         PracticeWindow.shared.close()
+        TrackpadWindow.shared.close()
+        TrackpadPreviewWindow.shared.close()
+        RaiseWindow.shared.close()
+        FingerCursor.shared.stop()
+        PassiveRecorder.shared.shutdown()
         #endif
         // Writing ends before quitting, so the band goes back to its normal mode.
         HandwritingSession.shared.finish()
@@ -76,9 +88,23 @@ struct KinesisApp: App {
 /// for light and dark menu bars. It dims while gestures are not reaching the Mac.
 private struct MenuBarLabel: View {
     @ObservedObject var model: BandModel
+    #if KINESIS_DEV
+    @ObservedObject private var recorder = PassiveRecorder.shared
+    #endif
+
     var body: some View {
-        Image(nsImage: model.live && model.controlsEnabled ? Self.live : Self.idle)
+        let icon = Image(nsImage: model.live && model.controlsEnabled ? Self.live : Self.idle)
             .accessibilityLabel(model.live && model.controlsEnabled ? "Kinesis, controls live" : "Kinesis")
+        #if KINESIS_DEV
+        // A dot while "record while I work" records, a ring while it waits.
+        switch recorder.status {
+        case .recording: HStack(spacing: 3) { icon; Text("●") }
+        case .paused: HStack(spacing: 3) { icon; Text("○") }
+        case .off: icon
+        }
+        #else
+        icon
+        #endif
     }
 
     // Drawn once each. The model publishes on every gesture, and the mark never changes.
@@ -128,6 +154,11 @@ private struct BandMenu: View {
             }
             #if KINESIS_DEV
             Button("open lab") { PracticeWindow.shared.open(model: model) }
+            Button("record trackpad") { TrackpadWindow.shared.open(model: model) }
+            Button("decoder preview") { TrackpadPreviewWindow.shared.open(model: model) }
+            Button("record finger raises") { RaiseWindow.shared.open(model: model) }
+            PassiveRecorderMenu()
+            FingerCursorMenu(model: model)
             #endif
         }
         Divider()

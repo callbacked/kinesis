@@ -214,3 +214,60 @@ struct WritePage: View {
     }
 
 }
+
+#if KINESIS_DEV
+/// Readings' row for handwriting research: a guided test and its review.
+struct HandwritingTestRow: View {
+    @ObservedObject var model: BandModel
+    @ObservedObject private var recording: BandModelRecording
+    @State private var split = HandwritingTrial.Split.development
+    @State private var reviewing = false
+
+    init(model: BandModel) {
+        self.model = model
+        _recording = ObservedObject(wrappedValue: HandwritingSession.shared.recording(for: model))
+    }
+
+    var body: some View {
+        OpenRow(title: "handwriting test", detail: "about 4½ minutes of prompts on the write page · wearing \(model.recordingWearingID.prefix(8).lowercased())") {
+            HStack(spacing: 10) {
+                Menu {
+                    Picker("Test set", selection: $split) {
+                        Text("development").tag(HandwritingTrial.Split.development)
+                        Text("evaluation").tag(HandwritingTrial.Split.evaluation)
+                    }
+                    Divider()
+                    Button("review a saved test…") { openReview() }
+                    Button("start a new wearing") { model.recordingWearingID = UUID().uuidString }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 13, weight: .medium)).frame(width: 34, height: 34)
+                        .background(PillSurface(fill: KinesisStyle.tray)).contentShape(Capsule())
+                }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                    .disabled(recording.isRunning)
+                if let review = recording.trialReview, !review.results.isEmpty, recording.done {
+                    Button("review \(review.results.count)") { reviewing = true }.buttonStyle(KinesisButtonStyle())
+                }
+                Button("start") { HandwritingSession.shared.requestTest(split) }
+                    .buttonStyle(KinesisButtonStyle())
+                    .disabled(recording.isRunning || !recording.ready)
+            }
+        }
+        .sheet(isPresented: $reviewing) { HandwritingTrialReviewView(recording: recording) }
+    }
+
+    private func openReview() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = BandModelRecording.labFolder
+        panel.message = "Choose a saved guided handwriting test."
+        panel.prompt = "Review"
+        panel.begin { response in
+            guard response == .OK, let folder = panel.url else { return }
+            recording.loadTrialReview(from: folder)
+            if recording.folder == folder && recording.problem == nil { reviewing = true }
+        }
+    }
+}
+#endif

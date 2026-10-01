@@ -136,7 +136,9 @@ private struct AllowedControls: MacControls {
         ("edge-strained-band", AnyView(MainView(model: try strained(), page: .band, scrolls: false))),
         ("edge-waiting-for-macos", AnyView(MainView(model: try waitingForMacOS(), page: .band, scrolls: false))),
     ]
+    #if KINESIS_DEV
     edges.append(("write-ready", AnyView(MainView(model: try readings(active: false), page: .write, scrolls: false))))
+    #endif
     let windows: [(String, AnyView)] = [
         ("overview-live", AnyView(MainView(model: try model(paired: true, live: true), scrolls: false))),
         ("overview-turning", AnyView(MainView(model: try model(paired: true, live: true, turning: true), scrolls: false))),

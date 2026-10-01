@@ -113,7 +113,11 @@ import KinesisCore
     func start() {
         guard !isRunning else { return }
         guard ready else { problem = "connect the band and turn on developer mode first."; return }
-        guard model.rawRecordingURL == nil else { problem = "stop the other recording first."; return }
+        #if KINESIS_DEV
+        guard model.rawRecordingURL == nil, !FingerCursor.shared.on else {
+            problem = "stop the other recording or finger cursor first."; return
+        }
+        #endif
         // Guided tests and trackpad recordings exist to save their signals.
         guard saves || (mode == .handwriting && !guidedHandwriting) else { problem = "this build doesn’t record."; return }
         if mode == .handwriting && guidedHandwriting,
@@ -137,6 +141,9 @@ import KinesisCore
             return
         }
         phase = .preparing; status = saves ? "waiting for muscle and motion signals…" : "getting the band ready…"
+        #if KINESIS_DEV
+        PassiveRecorder.shared.bandModeChanged()
+        #endif
         model.rawEMGListeners["band model recording"] = { [weak self] _, arrived in self?.lastEMG = arrived }
         model.gyroListeners["band model recording"] = { [weak self] values, stamp, arrived in
             guard let self else { return }
@@ -465,6 +472,9 @@ import KinesisCore
                 }
             }
             model.releaseModelRecording(owner)
+            #if KINESIS_DEV
+            PassiveRecorder.shared.bandModeChanged()
+            #endif
             if restoreControls && (!modelRequested || restored) && model.live && !model.controlsEnabled { model.toggleControls() }
             phase = .done
             status = saves ? (restored ? "saved · \(model.modelCaptureStatus.message)" : "saved") : (restored ? model.modelCaptureStatus.message : "")

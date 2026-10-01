@@ -75,6 +75,14 @@ struct CursorPage: View {
                 Button("open") { PracticeWindow.shared.open(model: model) }
                     .buttonStyle(KinesisButtonStyle())
             }
+            OpenRow(title: "trackpad recording", detail: "lab · sEMG with trackpad touches") {
+                Button("open") { TrackpadWindow.shared.open(model: model) }
+                    .buttonStyle(KinesisButtonStyle())
+            }
+            OpenRow(title: "decoder preview", detail: "lab · the trained trackpad decoder, live") {
+                Button("open") { TrackpadPreviewWindow.shared.open(model: model) }
+                    .buttonStyle(KinesisButtonStyle())
+            }
             #endif
 
             Text("hold Option to move your arm without moving the pointer.")
