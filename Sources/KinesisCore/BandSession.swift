@@ -79,6 +79,37 @@ public final class BandSession {
     public private(set) var hand: BandHand?
     private let log = Logger(subsystem: "local.callbacked.kinesis", category: "protocol")
     private var startupFrames = 0
+    private let modelCapture = BandModelCapture()
+    private var modelControlOpened = false
+    public var modelCaptureActive: Bool { modelCapture.status.active }
+
+    public func setModelCaptureEnabled(_ enabled: Bool, at time: Double) throws {
+        if enabled {
+            guard streamsEnabled, !stopping else { throw BandProtocolError("Connect the band before recording its model") }
+            try modelCapture.start(at: time)
+        } else { modelCapture.restore(at: time) }
+    }
+
+    public func recoverNormalModelMode(at time: Double) throws {
+        guard streamsEnabled, !stopping else { throw BandProtocolError("Connect the band before restoring its model") }
+        try modelCapture.recoverNormalMode(at: time)
+    }
+
+    public func flushModelCapture(at time: Double) throws -> (outgoing: Data, events: [BandEvent]) {
+        var outgoing = Data()
+        if !stopping, rawRequest == nil, motionRequest == nil, let request = modelCapture.next(at: time) {
+            let opened: Bool
+            switch request.channel {
+            case streamChannel: opened = true
+            case configServiceChannel: opened = configServiceOpened; configServiceOpened = true
+            default: opened = modelControlOpened; modelControlOpened = true
+            }
+            outgoing = try encrypt(BandWire.frame(channel: request.channel,
+                words: opened ? [] : [0x8100ce56, 0x02000314],
+                payload: request.payload(streams: streamControl(motion, raw: rawRequested ? rawEMG : nil))))
+        }
+        return (outgoing, modelCapture.drainEvents())
+    }
 
     public init(enrollment: BandEnrollmentIdentity? = nil, ceremony: OwnershipCeremony? = nil, rawEMG: Bool = false,
                 motion: MotionStreams = .all) throws {
@@ -239,6 +270,9 @@ public final class BandSession {
     private func streamControl(_ motion: MotionStreams, raw: Bool?) -> Data {
         (raw.map { BandWire.field(2, $0 ? 1 : 0) } ?? Data())
             + BandWire.field(3, 1) + BandWire.field(6, motion.gyro ? 1 : 0) + BandWire.field(8, motion.orientation ? 1 : 0)
+            + (modelCapture.streamTouched ? [4, 22, 23].reduce(into: Data()) {
+                $0 += BandWire.field($1, modelCapture.streamWanted ? 1 : 0)
+            } : Data())
     }
 
     /// Asks for these motion streams. Before the subscription it only changes what
@@ -267,7 +301,7 @@ public final class BandSession {
         guard wanted != motion else { wantedMotion = nil; return Data() }
         // The subscription has not gone out yet: it will simply ask for these.
         guard setupStage == .input else { motion = wanted; wantedMotion = nil; return Data() }
-        guard streamsEnabled, rawRequest == nil, motionRequest == nil else { return Data() }
+        guard streamsEnabled, rawRequest == nil, motionRequest == nil, modelCapture.pending == nil else { return Data() }
         rawRequestID += 1
         motionRequest = (rawRequestID, wanted, time)
         return try encrypt(BandWire.frame(channel: streamChannel, words: [],
@@ -488,7 +522,7 @@ public final class BandSession {
         case true?: control = streamControl(motion, raw: nil)
         case false?:
             // Stopping turns every stream off, whichever were on.
-            control = ((rawRequested ? [2] : []) + Self.allStreamFields).reduce(into: Data()) { $0 += BandWire.field($1, 0) }
+            control = ((rawRequested ? [2] : []) + Self.allStreamFields + (modelCapture.streamTouched ? [4, 22, 23] : [])).reduce(into: Data()) { $0 += BandWire.field($1, 0) }
         case nil: control = Data()
         }
         return try encrypt(BandWire.frame(channel: streamChannel, words: id == 2 ? [0x8100ce56, 0x02000314] : [],
@@ -511,6 +545,19 @@ public final class BandSession {
             channelTypes[frame.channel] = kind
         }
         guard let kind = channelTypes[frame.channel] else { return [] }
+        if kind == 0x02000315, modelCapture.receive(channel: frame.channel, payload: frame.payload, at: time) {
+            return modelCapture.drainEvents()
+        }
+        if kind == 0x0200020c, setupStage == .input, !stopping, modelCapture.status.active {
+            // A malformed frame is skipped: failing the connection here would leave the band
+            // in the recording's model until the next reconnect.
+            guard let sample = try? BandInferenceSample(payload: frame.payload) else {
+                log.error("Skipped a malformed band model frame on channel \(frame.channel, privacy: .public)")
+                return modelCapture.drainEvents()
+            }
+            modelCapture.receive(sample, at: time)
+            return [BandEvent(.inferenceFrame(sample), at: time)] + modelCapture.drainEvents()
+        }
         if !streaming, startupFrames < 16 {
             startupFrames += 1
             log.info("Band startup response: channel \(frame.channel, privacy: .public), type \(String(kind, radix: 16), privacy: .public), payload bytes \(frame.payload.count, privacy: .public)")

@@ -128,7 +128,7 @@ private struct AllowedControls: MacControls {
     }
 
     let smallest = CGSize(width: 920, height: 660)
-    let edges: [(String, AnyView)] = [
+    var edges: [(String, AnyView)] = [
         ("cursor-ready", AnyView(MainView(model: try readings(active: false), page: .cursor, scrolls: false))),
         ("readings-empty", AnyView(MainView(model: try readings(active: false), page: .readings, scrolls: false))),
         ("readings-synthetic-live", AnyView(MainView(model: try readings(active: true), page: .readings, scrolls: false))),
@@ -136,6 +136,7 @@ private struct AllowedControls: MacControls {
         ("edge-strained-band", AnyView(MainView(model: try strained(), page: .band, scrolls: false))),
         ("edge-waiting-for-macos", AnyView(MainView(model: try waitingForMacOS(), page: .band, scrolls: false))),
     ]
+    edges.append(("write-ready", AnyView(MainView(model: try readings(active: false), page: .write, scrolls: false))))
     let windows: [(String, AnyView)] = [
         ("overview-live", AnyView(MainView(model: try model(paired: true, live: true), scrolls: false))),
         ("overview-turning", AnyView(MainView(model: try model(paired: true, live: true, turning: true), scrolls: false))),

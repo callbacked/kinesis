@@ -37,6 +37,12 @@ mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/Resources"
 cp "$binary_dir/Kinesis" "$staged_app/Contents/MacOS/Kinesis"
 cp -R "$binary_dir/Kinesis_Kinesis.bundle" "$staged_app/Contents/Resources/"
 cp Packaging/Info.plist "$staged_app/Contents/Info.plist"
+# A dev build keeps the bundle ID, so it shares settings and the band's pairing,
+# and shows as "Kinesis Dev" in Spotlight and the menu bar.
+if [ "${KINESIS_DEV:-}" = 1 ]; then
+    plutil -replace CFBundleName -string "Kinesis Dev" "$staged_app/Contents/Info.plist"
+    plutil -replace CFBundleDisplayName -string "Kinesis Dev" "$staged_app/Contents/Info.plist"
+fi
 cp LICENSE "$staged_app/Contents/Resources/LICENSE"
 swiftc -parse-as-library Sources/Kinesis/KinesisMark.swift scripts/export-icon.swift -o .build/tools/export-icon
 .build/tools/export-icon "$stage_dir/Kinesis.iconset"

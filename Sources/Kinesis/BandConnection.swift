@@ -29,9 +29,17 @@ protocol BandConnection: AnyObject {
     func setMotionStreams(_ streams: MotionStreams)
     /// Turns the motion streams off and on again, to clear a backed-up stream.
     func restartMotionStreams()
+    func setModelCaptureEnabled(_ enabled: Bool) throws
+    func recoverNormalModelMode() throws
 }
 
 extension BandConnection {
+    func recoverNormalModelMode() throws {
+        throw KinesisError(message: "This connection does not support band model recovery")
+    }
+    func setModelCaptureEnabled(_ enabled: Bool) throws {
+        throw KinesisError(message: "This connection does not support band model recording")
+    }
     func setMotionStreams(_ streams: MotionStreams) {}
     func restartMotionStreams() {}
 
@@ -73,6 +81,7 @@ final class NativeBandConnection: NSObject, BandConnection,
     private var writtenBytes = 0
     private var previousMotionMessages = 0
     private var stopping = false
+    private var stopAfterModelCapture = false
     private var disconnecting = false
     private var failure: Error?
     private var stage = "idle"
@@ -109,6 +118,7 @@ final class NativeBandConnection: NSObject, BandConnection,
         lease = descriptor
         self.operation = operation
         stopping = false
+        stopAfterModelCapture = false
         disconnecting = false
         failure = nil
         stage = "waiting for Bluetooth"
@@ -148,6 +158,11 @@ final class NativeBandConnection: NSObject, BandConnection,
 
     func stop() {
         guard onEnd != nil, !stopping, !disconnecting else { return }
+        if let session, session.modelCaptureActive {
+            stopAfterModelCapture = true
+            try? session.setModelCaptureEnabled(false, at: now)
+            return
+        }
         stopping = true
         stage = "stopping streams"
         do {
@@ -166,6 +181,20 @@ final class NativeBandConnection: NSObject, BandConnection,
             outgoing.append(try session.setMotionStreams(streams, at: now))
             try flushOutput()
         } catch { fail(error) }
+    }
+
+    func setModelCaptureEnabled(_ enabled: Bool) throws {
+        guard let session, !stopping, !disconnecting, !stopAfterModelCapture else {
+            throw KinesisError(message: "Connect the band before recording its model")
+        }
+        try session.setModelCaptureEnabled(enabled, at: now)
+    }
+
+    func recoverNormalModelMode() throws {
+        guard let session, !stopping, !disconnecting, !stopAfterModelCapture else {
+            throw KinesisError(message: "Connect the band before restoring its model")
+        }
+        try session.recoverNormalModelMode(at: now)
     }
 
     func restartMotionStreams() {
@@ -268,6 +297,17 @@ final class NativeBandConnection: NSObject, BandConnection,
         }
         if !stopping, let session {
             for event in session.tick(at: now) { emit(event) }
+            do {
+                let result = try session.flushModelCapture(at: now)
+                outgoing.append(result.outgoing)
+                for event in result.events { emit(event) }
+                try flushOutput()
+            } catch { fail(error); return }
+            if stopAfterModelCapture, !session.modelCaptureActive {
+                stopAfterModelCapture = false
+                stop()
+                return
+            }
             do { outgoing.append(try session.flushMotion(at: now)) } catch { fail(error); return }
             if session.streamsEnabled, now >= nextBatteryStatusRead {
                 nextBatteryStatusRead = now + 5

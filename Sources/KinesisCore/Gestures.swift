@@ -43,6 +43,9 @@ public struct BandEvent: Sendable {
         case rawEMGConfiguration(EMGConfiguration)
         case rawEMGState(Bool)
         case rawEMGFailure(String)
+        case inferenceFrame(BandInferenceSample)
+        case inferenceConfiguration(Data)
+        case modelCaptureState(BandModelCaptureStatus)
         /// The input channel read is waiting on a system Bluetooth pairing request.
         case systemPairingPending
     }
@@ -204,7 +207,11 @@ public struct DialRouter: Sendable {
 public enum MacAction: String, CaseIterable, Codable, Identifiable, Sendable {
     case none, previousDesktop, nextDesktop, missionControl, dismiss, previousWindow, nextWindow, previousTab, nextTab
     case playPause, mute, volumeUp, volumeDown, brightnessUp, brightnessDown
+    /// Kinesis's own switches, offered in developer mode. They send no shortcut.
+    case toggleAirCursor, toggleHandwriting
     public var id: String { rawValue }
+    /// Handled by Kinesis itself, not posted to the Mac.
+    public var isKinesisSwitch: Bool { self == .toggleAirCursor || self == .toggleHandwriting }
     public var title: String {
         switch self {
         case .none: "No action"
@@ -222,6 +229,8 @@ public enum MacAction: String, CaseIterable, Codable, Identifiable, Sendable {
         case .volumeDown: "Volume down"
         case .brightnessUp: "Brightness up"
         case .brightnessDown: "Brightness down"
+        case .toggleAirCursor: "Air cursor on / off"
+        case .toggleHandwriting: "Handwriting on / off"
         }
     }
     public var shortcut: String {
@@ -239,11 +248,13 @@ public enum MacAction: String, CaseIterable, Codable, Identifiable, Sendable {
         case .mute: "mute"
         case .volumeUp, .brightnessUp: "+"
         case .volumeDown, .brightnessDown: "−"
+        case .toggleAirCursor, .toggleHandwriting: "—"
         }
     }
     public var keyCode: UInt16? {
         switch self {
-        case .none, .playPause, .mute, .volumeUp, .volumeDown, .brightnessUp, .brightnessDown: nil
+        case .none, .playPause, .mute, .volumeUp, .volumeDown, .brightnessUp, .brightnessDown,
+             .toggleAirCursor, .toggleHandwriting: nil
         case .previousDesktop: 123
         case .nextDesktop: 124
         case .missionControl: 126
