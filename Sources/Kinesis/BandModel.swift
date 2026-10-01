@@ -74,6 +74,13 @@ final class BandModel: ObservableObject {
     @Published private(set) var lastAction = "Controls are paused"
     @Published private(set) var dialEngaged = false
     @Published private(set) var pinchedFinger: String?
+    // A pinch on the finger bound to the air cursor switch, waiting to be told apart from a click.
+    private var switchPending: BandGesture?
+    private var switchReleased = false
+    private var switchSecondTapUntil: Double?
+    private var switchWait: Task<Void, Never>?
+    /// Turns handwriting on or off, for a gesture bound to it. Dev builds set it.
+    var onToggleHandwriting: (() -> Void)?
     @Published var tapMappings: [TapGesture: MacAction] = [.indexTap: .none, .indexDoubleTap: .playPause, .middleTap: .none, .middleDoubleTap: .mute, .middleHold: .none] {
         didSet {
             defaults.set(Dictionary(uniqueKeysWithValues: tapMappings.map { ($0.key.rawValue, $0.value.rawValue) }), forKey: "tapMappings")
@@ -132,7 +139,7 @@ final class BandModel: ObservableObject {
             airPointer.steadiness = cursorSteadiness
         }
     }
-    var canUseAirCursor: Bool { developerMode && live && controlsEnabled && handConfirmed && pendingHand == nil }
+    var canUseAirCursor: Bool { developerMode && live && controlsEnabled && handConfirmed && pendingHand == nil && !modelControlsUnavailable }
     /// How far the forearm turns to cross the screen: measured by calibration, or the standard reach.
     @Published private(set) var pointerReach = PointerReach.standard(for: .right) {
         didSet { pointerHome.reset() }
@@ -174,22 +181,40 @@ final class BandModel: ObservableObject {
     private var lastMotionRestart = -Double.infinity
     private var cursorPressedFingers: Set<String> = []
     private var cursorArmedAt = Double.infinity
+    /// The readings page's switch for live EMG. Dev tools hold the stream with
+    /// `holdRawEMG(_:_:)` instead, so none of them can turn it off under another.
     @Published var rawEMGEnabled = false {
         didSet {
             guard rawEMGEnabled != oldValue else { return }
             defaults.set(rawEMGEnabled, forKey: "rawEMGEnabled")
             if !rawEMGEnabled { stopRawRecording() }
-            let deferringDisable = rawEMGChanging && !rawEMGEnabled
-            rawEMGError = nil
-            rawEMGChanging = live
-            do { try connection.setRawEMGEnabled(rawEMGEnabled) }
-            catch {
-                if deferringDisable {
-                    rawDisablePending = true
-                } else {
-                    rawEMGChanging = false
-                    rawEMGError = error.localizedDescription
-                }
+            applyRawEMG(wasWanted: oldValue || !rawEMGHolders.isEmpty)
+        }
+    }
+    /// Dev tools that need raw sEMG right now. Unlike the switch, a hold survives a
+    /// reconnect: a recording keeps its stream after the link drops and returns.
+    private(set) var rawEMGHolders: Set<String> = []
+    /// Whether the band should stream raw sEMG: the switch is on, or a tool holds it.
+    var rawEMGWanted: Bool { rawEMGEnabled || !rawEMGHolders.isEmpty }
+
+    func holdRawEMG(_ holder: String, _ hold: Bool) {
+        let wasWanted = rawEMGWanted
+        if hold { rawEMGHolders.insert(holder) } else { rawEMGHolders.remove(holder) }
+        applyRawEMG(wasWanted: wasWanted)
+    }
+
+    private func applyRawEMG(wasWanted: Bool) {
+        guard rawEMGWanted != wasWanted else { return }
+        let deferringDisable = rawEMGChanging && !rawEMGWanted
+        rawEMGError = nil
+        rawEMGChanging = live
+        do { try connection.setRawEMGEnabled(rawEMGWanted) }
+        catch {
+            if deferringDisable {
+                rawDisablePending = true
+            } else {
+                rawEMGChanging = false
+                rawEMGError = error.localizedDescription
             }
         }
     }
@@ -197,6 +222,89 @@ final class BandModel: ObservableObject {
     @Published private(set) var rawEMGChanging = false
     @Published private(set) var rawEMGError: String?
     let readings = EMGReadings()
+    /// Each decoded raw sEMG batch, with when it arrived. Dev tools listen here.
+    var rawEMGListeners: [String: (EMGBatch, Double) -> Void] = [:]
+    /// Each gyro sample in raw counts, with the band's time in µs and when it arrived.
+    var gyroListeners: [String: (SIMD3<Double>, UInt64, Double) -> Void] = [:]
+    @Published private(set) var modelCaptureStatus = BandModelCaptureStatus.idle
+    @Published var recordingWearingID = "" {
+        didSet { defaults.set(recordingWearingID, forKey: "recordingWearingID") }
+    }
+    var modelCaptureListeners: [String: (BandEvent) -> Void] = [:]
+    @Published private(set) var modelRecordingOwner: UUID?
+    @Published private(set) var modelRecoveryBands: Set<String> = []
+    private var modelCaptureAddress: String?
+    var modelRecoveryRequired: Bool {
+        if case .connect(let address) = activeOperation { return modelRecoveryBands.contains(address) }
+        return modelRecoveryBands.contains(selectedAddress)
+    }
+    var modelControlsUnavailable: Bool { modelRecordingOwner != nil || modelCaptureStatus.active || modelRecoveryRequired }
+
+    func acquireModelRecording(_ owner: UUID) throws {
+        guard !modelControlsUnavailable else { throw KinesisError(message: "finish the band model operation before starting another recording.") }
+        modelRecordingOwner = owner
+        pause()
+        setAirCursorEnabled(false)
+    }
+
+    func releaseModelRecording(_ owner: UUID) {
+        if modelRecordingOwner == owner { modelRecordingOwner = nil }
+    }
+
+    private func saveModelRecovery(_ bands: Set<String>) throws {
+        let key = "modelRecoveryBands"
+        defaults.set(bands.sorted(), forKey: key)
+        // Flush the marker before issuing a band write: a process crash must
+        // not lose the only record of an unfinished model switch.
+        guard defaults.synchronize() else {
+            defaults.set(modelRecoveryBands.sorted(), forKey: key)
+            throw KinesisError(message: "couldn’t save the band’s recovery state.")
+        }
+        modelRecoveryBands = bands
+    }
+
+    func setModelCaptureEnabled(_ enabled: Bool) throws {
+        guard !enabled || (live && developerMode) else {
+            throw KinesisError(message: "connect the band and turn on developer mode first.")
+        }
+        if enabled {
+            guard !modelCaptureStatus.active, !modelRecoveryRequired,
+                  case .connect(let address) = activeOperation else {
+                throw KinesisError(message: "restore the band’s normal mode before starting another recording.")
+            }
+            let before = modelRecoveryBands
+            try saveModelRecovery(before.union([address]))
+            modelCaptureAddress = address
+            pause()
+            setAirCursorEnabled(false)
+            do {
+                try connection.setModelCaptureEnabled(true)
+            } catch {
+                // Nothing was written to the band: no recovery is owed.
+                try? saveModelRecovery(before)
+                modelCaptureAddress = nil
+                throw error
+            }
+            modelCaptureStatus = .init(phase: .preparing, message: "checking the band model…")
+            return
+        }
+        try connection.setModelCaptureEnabled(enabled)
+        if enabled { modelCaptureStatus = .init(phase: .preparing, message: "checking the band model…") }
+    }
+
+    private func recoverModelIfNeeded(address: String) {
+        guard modelRecoveryBands.contains(address), !modelCaptureStatus.active else { return }
+        modelCaptureAddress = address
+        pause()
+        setAirCursorEnabled(false)
+        do {
+            try connection.recoverNormalModelMode()
+            modelCaptureStatus = .init(phase: .restoring, message: "recovering the band’s normal mode…")
+        } catch {
+            modelCaptureStatus = .init(phase: .finished, message: "normal band mode needs recovery", problem: error.localizedDescription)
+            self.error = "normal band mode could not be verified. reconnect to retry."
+        }
+    }
     let motion = MotionReadings()
     var rawEMGFrames: Int { readings.frames }
     var rawEMGBytes: Int { readings.bytes }
@@ -288,7 +396,7 @@ final class BandModel: ObservableObject {
         return charging == false ? .onBattery : .unknown
     }
     var canScan: Bool { !quitting && !sleeping && (!busy || wantsConnection) }
-    var canChangeHand: Bool { live && handConfirmed && pendingHand == nil }
+    var canChangeHand: Bool { live && handConfirmed && pendingHand == nil && !modelControlsUnavailable }
     var handSettingStatus: String {
         if let handSettingError { return handSettingError }
         if pendingHand != nil { return "switching hands…" }
@@ -352,6 +460,10 @@ final class BandModel: ObservableObject {
         self.cursorFrames = cursorFrames
         airPointer.tuning = cursorTuning
         self.defaults = defaults
+        let wearingID = defaults.string(forKey: "recordingWearingID") ?? UUID().uuidString
+        recordingWearingID = wearingID
+        defaults.set(wearingID, forKey: "recordingWearingID")
+        modelRecoveryBands = Set(defaults.stringArray(forKey: "modelRecoveryBands") ?? [])
         self.started = clock()
         self.metricsAt = clock()
         self.connection = connection
@@ -383,7 +495,7 @@ final class BandModel: ObservableObject {
         }
         airPointer.steadiness = cursorSteadiness
         rawEMGEnabled = developerMode && defaults.bool(forKey: "rawEMGEnabled")
-        try? connection.setRawEMGEnabled(rawEMGEnabled)
+        try? connection.setRawEMGEnabled(rawEMGWanted)
         bandHand = BandHand(rawValue: defaults.string(forKey: "bandHand") ?? "") ?? .right
         showingSetup = !defaults.bool(forKey: "setupCompleted")
         totalGestureCount = max(0, defaults.integer(forKey: "totalGestureCount"))
@@ -653,6 +765,7 @@ final class BandModel: ObservableObject {
 
     func toggleControls() {
         if controlsEnabled { pause(); return }
+        guard !modelControlsUnavailable else { return }
         guard !showingSetup, pendingHand == nil else { return }
         accessibilityAllowed = controls.trusted
         guard accessibilityAllowed else {
@@ -895,6 +1008,12 @@ final class BandModel: ObservableObject {
     }
 
     private func connectionEnded(_ failure: Error?, operation: BandOperation) {
+        if modelCaptureStatus.active {
+            modelCaptureStatus = .init(phase: .finished, message: "band disconnected",
+                problem: "recording stopped; normal band mode could not be verified")
+            let event = BandEvent(.modelCaptureState(modelCaptureStatus), at: clock())
+            for listener in modelCaptureListeners.values { listener(event) }
+        }
         // Readings are opt-in again after a dropped session; an unsupported
         // combined subscription must never create a reconnect loop.
         rawEMGEnabled = false
@@ -1057,6 +1176,17 @@ final class BandModel: ObservableObject {
         let now = clock()
         MotionLog.shared.record(event)
         switch event.payload {
+        case .modelCaptureState(let status):
+            modelCaptureStatus = status
+            if status.phase == .finished, status.restorationVerified, let address = modelCaptureAddress {
+                do { try saveModelRecovery(modelRecoveryBands.subtracting([address])); modelCaptureAddress = nil }
+                catch { self.error = error.localizedDescription }
+            } else if status.phase == .finished, modelRecoveryRequired {
+                error = "normal band mode could not be verified. reconnect to retry."
+            }
+            for listener in modelCaptureListeners.values { listener(event) }
+        case .inferenceFrame, .inferenceConfiguration:
+            for listener in modelCaptureListeners.values { listener(event) }
         case .devices(let discovered):
             // Preserve the remembered band if it isn't advertising during this scan.
             let remembered = devices.first { $0.address == selectedAddress }
@@ -1107,12 +1237,17 @@ final class BandModel: ObservableObject {
             } else if case .connect = activeOperation, pairRoute == .connecting {
                 completePairing()
             }
-            rawEMGChanging = rawEMGEnabled
+            rawEMGChanging = rawEMGWanted
+            if case .connect(let address) = activeOperation { recoverModelIfNeeded(address: address) }
             if controlsEnabled { gate.arm(at: now) }
         case .disconnected: live = false; charging = nil; suspendActions()
         case .rawEMGFrame(let payload):
             guard wantsConnection, !sleeping else { return }
             readings.receive(payload, at: now)
+            if !rawEMGListeners.isEmpty, let configuration = readings.configuration, configuration.isSupported,
+               let batch = try? EMGBatch(payload: payload, configuration: configuration) {
+                for listener in rawEMGListeners.values { listener(batch, event.receivedAt) }
+            }
             markDataArrived(at: event.receivedAt)
             receivedInput()
             recordRawFrame(payload, at: now)
@@ -1124,9 +1259,9 @@ final class BandModel: ObservableObject {
             rawEMGChanging = false
             rawEMGError = nil
             // Developer mode may have been disabled while an enable was in flight.
-            if active != rawEMGEnabled {
+            if active != rawEMGWanted {
                 do {
-                    try connection.setRawEMGEnabled(rawEMGEnabled)
+                    try connection.setRawEMGEnabled(rawEMGWanted)
                     rawEMGChanging = true
                 } catch { rawEMGError = error.localizedDescription }
             }
@@ -1175,7 +1310,7 @@ final class BandModel: ObservableObject {
             if airCursorEnabled {
                 guard !cursorRepositioning else { return }
                 if message.finger != "thumb" {
-                    receiveCursorGesture(message, now: now)
+                    if !holdForCursorSwitch(message, now: now) { receiveCursorGesture(message, now: now) }
                     return
                 }
             }
@@ -1189,6 +1324,21 @@ final class BandModel: ObservableObject {
                 }
             }
             guard let gesture = router.gesture(from: message, now: now) else { return }
+            // The band keeps recognizing gestures while it runs another model, as its
+            // handwriting one, though controls are paused. The gesture bound to handwriting
+            // still works then, so writing can end the way it started.
+            if modelCaptureStatus.active {
+                connectionLog.info("Gesture during a band model recording: \(gesture.label, privacy: .public)")
+                let bound: MacAction = switch gesture {
+                case .swipe(let direction): mappings[direction] ?? .none
+                case .tap(let tap): tapMappings[tap] ?? .none
+                }
+                if bound == .toggleHandwriting {
+                    recognizedGesture = gesture
+                    onToggleHandwriting?()
+                    return
+                }
+            }
             if airCursorEnabled { steadyCursor(until: now + 0.12) }
             let action: MacAction
             switch gesture {
@@ -1260,6 +1410,7 @@ final class BandModel: ObservableObject {
         case .gyro(let timestamp, let values):
             let delay = measureLinkDelay(band: timestamp, host: event.receivedAt)
             if delay <= Self.lateInput { airPointer.receiveGyro(values, at: event.receivedAt - delay) }
+            for listener in gyroListeners.values { listener(values, timestamp, event.receivedAt) }
             if cursorPageVisible {
                 calmArmSpeed += (airPointer.speed - calmArmSpeed) * (1 - exp(-(1.0 / 128) / 0.25))
                 if event.receivedAt - cursorLiveAt.armSpeed >= 0.05 {
@@ -1293,6 +1444,107 @@ final class BandModel: ObservableObject {
         if !live { live = true }
         if phase != "Connected" { phase = "Connected" }
         if automaticStartPending && controls.trusted { toggleControls() }
+    }
+
+    /// While the air cursor runs, its pinches are clicks. When a tap gesture is bound to
+    /// turning it off, that finger's pinches wait just long enough to tell the switch from a
+    /// click: a double tap waits for a second pinch, a hold for the pinch to last, a single tap
+    /// for the release. Then either the cursor turns off with no click, or the click goes
+    /// through as it would have. The other finger is never held back.
+    /// Returns true when it took the message.
+    private func holdForCursorSwitch(_ message: BandGesture, now: Double) -> Bool {
+        guard let bound = tapMappings.first(where: { $0.value == .toggleAirCursor })?.key,
+              message.finger == bound.finger, !message.synthetic else { return false }
+        let actions = [message.action, message.derivedAction]
+        let press = actions.contains(where: { ["press", "buttonPress"].contains($0) }) && !actions.contains("buttonHold")
+        let release = actions.contains(where: { ["release", "buttonRelease", "buttonHoldRelease"].contains($0) })
+        // The band's tap, double tap and hold reports describe the same pinches: the cursor ignores them.
+        guard press || release else { return false }
+        switch bound.action {
+        case "doubletap":
+            if press {
+                if let until = switchSecondTapUntil, now <= until {
+                    // Its release then goes down the ordinary path, where it does nothing.
+                    turnOffCursorBySwitch()
+                    return true
+                }
+                switchPending = message
+                switchReleased = false
+                // Held past a tap: a drag, so it presses now.
+                waitThenReplay(after: Self.switchHoldLimit) { $0.switchReleased ? nil : .press }
+                return true
+            }
+            guard switchPending != nil else { return false }
+            switchReleased = true
+            switchSecondTapUntil = now + Self.switchDoubleTapWindow
+            // No second pinch in time: the click it was.
+            waitThenReplay(after: Self.switchDoubleTapWindow) { _ in .click }
+            return true
+        case "hold":
+            if press {
+                switchPending = message
+                switchReleased = false
+                waitThenReplay(after: Self.switchHoldLimit) { model in
+                    guard !model.switchReleased else { return nil }
+                    model.turnOffCursorBySwitch()
+                    return nil
+                }
+                return true
+            }
+            guard switchPending != nil else { return false }
+            switchReleased = true
+            replayPending(.click, now: now)
+            return true
+        default:
+            // A single tap: a quick pinch is the switch, and a longer one still drags.
+            if press {
+                switchPending = message
+                switchReleased = false
+                waitThenReplay(after: Self.switchHoldLimit) { $0.switchReleased ? nil : .press }
+                return true
+            }
+            guard switchPending != nil else { return false }
+            turnOffCursorBySwitch()
+            return true
+        }
+    }
+
+    private enum SwitchReplay { case press, click }
+    private static let switchHoldLimit = 0.35
+    private static let switchDoubleTapWindow = 0.3
+
+    /// After `delay`, if the pinch is still waiting, `decide` says what it becomes, if anything.
+    private func waitThenReplay(after delay: Double, _ decide: @escaping @MainActor (BandModel) -> SwitchReplay?) {
+        switchWait?.cancel()
+        let pending = switchPending
+        switchWait = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled, self.switchPending?.sequence == pending?.sequence,
+                  self.switchPending?.timestampUs == pending?.timestampUs, let replay = decide(self) else { return }
+            self.replayPending(replay, now: self.clock())
+        }
+    }
+
+    /// Sends the waiting pinch on as the cursor would have taken it: a press, or a whole click.
+    private func replayPending(_ replay: SwitchReplay, now: Double) {
+        guard let pending = switchPending else { return }
+        switchPending = nil
+        switchSecondTapUntil = nil
+        switchWait?.cancel()
+        func fresh(_ action: String) -> BandGesture {
+            BandGesture(sequence: pending.sequence, timestampUs: pending.timestampUs, finger: pending.finger, action: action,
+                        derivedAction: "unknown", synthetic: false, receivedAt: now)
+        }
+        receiveCursorGesture(fresh("press"), now: now)
+        if replay == .click { receiveCursorGesture(fresh("release"), now: now) }
+    }
+
+    private func turnOffCursorBySwitch() {
+        switchPending = nil
+        switchSecondTapUntil = nil
+        switchWait?.cancel()
+        setAirCursorEnabled(false)
+        lastAction = "Air cursor off"
     }
 
     private func receiveCursorGesture(_ message: BandGesture, now: Double) {
@@ -1523,7 +1775,9 @@ final class BandModel: ObservableObject {
         // sustained data before allowing another automatic sensor recovery.
         if let sensorHealthySince, time - sensorHealthySince >= 30 { sensorRecoveryUsed = false }
         subscribedAt = nil
-        streamHint = nil
+        // Published: assigning it, even the same nil, redraws every view that reads the model,
+        // and this runs for every sensor batch.
+        if streamHint != nil { streamHint = nil }
     }
 
     /// One buffered jsonl line per frame. Sensor payload and timestamps only.
@@ -1638,6 +1892,19 @@ final class BandModel: ObservableObject {
     }
 
     private func dispatch(_ action: MacAction, count: Int = 1) {
+        // Kinesis's own switches, only in developer mode.
+        if action.isKinesisSwitch {
+            guard developerMode else { return }
+            switch action {
+            case .toggleAirCursor:
+                setAirCursorEnabled(!airCursorEnabled)
+                lastAction = airCursorEnabled ? "Air cursor on" : "Air cursor off"
+            case .toggleHandwriting:
+                onToggleHandwriting?()
+            default: break
+            }
+            return
+        }
         do {
             for _ in 0..<count { try controls.post(action) }
             let label = action.title + (count > 1 ? " ×\(count)" : "")
@@ -1702,7 +1969,7 @@ final class BandModel: ObservableObject {
         stopRawRecording()
         await recordingTask?.value
         disconnect()
-        let deadline = ContinuousClock.now + .seconds(8)
+        let deadline = ContinuousClock.now + .seconds(modelCaptureStatus.active ? 60 : 8)
         while busy && ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(100)) }
     }
 }

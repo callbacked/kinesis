@@ -3,8 +3,16 @@ import SwiftUI
 import KinesisCore
 
 enum AppPage: String, CaseIterable, Identifiable {
-    case overview, gestures, band, readings, cursor
+    case overview, gestures, band, readings, cursor, write
     var id: String { rawValue }
+
+    /// Pages only developer mode shows.
+    var developer: Bool { self == .readings || self == .cursor || self == .write }
+}
+
+extension Notification.Name {
+    /// Asks the main window to show a page. The object is the page's raw value.
+    static let kinesisOpenPage = Notification.Name("kinesis.openPage")
 }
 
 /// The window is one field. The band's column sits on the left of it. The rest is
@@ -43,7 +51,10 @@ struct MainView: View {
             }
         }
         .onChange(of: model.developerMode) { _, enabled in
-            if !enabled, page == .readings || page == .cursor { open(.band) }
+            if !enabled, page.developer { open(.band) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .kinesisOpenPage)) { note in
+            if let raw = note.object as? String, let next = AppPage(rawValue: raw) { open(next) }
         }
         .frame(minWidth: 920, minHeight: 660)
         .background(Field())
@@ -70,6 +81,7 @@ struct MainView: View {
                 case .band: BandPage(model: model)
                 case .readings: ReadingsPage(model: model)
                 case .cursor: CursorPage(model: model)
+                case .write: WritePage(model: model)
                 }
             // The old page leaves at once. The new one arrives part by part, from the top.
             }.id(page).transition(.asymmetric(insertion: .identity, removal: .opacity.animation(.easeOut(duration: 0.1))))
@@ -82,7 +94,7 @@ struct MainView: View {
 
     private var topBar: some View {
         HStack(spacing: 6) {
-            TextTabs(options: AppPage.allCases.filter { ![.readings, .cursor].contains($0) || model.developerMode }.map { Choice($0, $0.rawValue) }, selection: $page)
+            TextTabs(options: AppPage.allCases.filter { !$0.developer || model.developerMode }.map { Choice($0, $0.rawValue) }, selection: $page)
             Spacer()
             AppearanceMenu(compact: true).foregroundStyle(KinesisStyle.secondary)
             Button { model.beginSetup() } label: {

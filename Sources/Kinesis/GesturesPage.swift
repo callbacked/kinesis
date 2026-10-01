@@ -5,7 +5,17 @@ struct GesturesPage: View {
     @ObservedObject var model: BandModel
     @State private var family = "swipe"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let actions = MacAction.allCases.map { Choice($0, $0.title.lowercased()) }
+    /// Kinesis's own switches only show in developer mode, and the air cursor one only in dev builds.
+    private var actions: [Choice<MacAction>] {
+        MacAction.allCases.filter { action in
+            guard action.isKinesisSwitch else { return true }
+            #if KINESIS_DEV
+            return model.developerMode
+            #else
+            return model.developerMode && action != .toggleAirCursor
+            #endif
+        }.map { Choice($0, $0.title.lowercased()) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {

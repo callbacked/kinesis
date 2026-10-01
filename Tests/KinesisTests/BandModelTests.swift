@@ -10,6 +10,10 @@ import KinesisCore
     private var onEnd: ((Error?) -> Void)?
     var rawEMGMode = false
     var rawWriteError: Error?
+    private(set) var modelCaptureRequests: [Bool] = []
+    func setModelCaptureEnabled(_ enabled: Bool) throws { modelCaptureRequests.append(enabled) }
+    private(set) var modelRecoveryRequests = 0
+    func recoverNormalModelMode() throws { modelRecoveryRequests += 1 }
     private(set) var motionRequests: [MotionStreams] = []
     private(set) var motionRestarts = 0
     func setMotionStreams(_ streams: MotionStreams) { motionRequests.append(streams) }
@@ -234,7 +238,7 @@ import KinesisCore
     await model.shutdown()
 }
 
-@MainActor private final class RecordingControls: MacControls {
+@MainActor final class RecordingControls: MacControls {
     var trusted = true
     var failure: Error?
     private(set) var actions: [MacAction] = []
@@ -2006,4 +2010,110 @@ private struct FakePairClient: BandPairClient {
     let reach = model.pointerReach
     model.cursorSteadiness = 0.9
     #expect(connection.motionRequests.count == 1 && model.pointerReach == reach)
+}
+
+@Test @MainActor func aToolsHoldOnRawEMGSharesTheStreamWithTheReadingsSwitch() async throws {
+    let connection = RecordedConnection()
+    let model = BandModel(defaults: MemoryDefaults(), connection: connection, sessionStore: SavedSessionStore(), clock: { 100 })
+    model.selectedAddress = "test-band"
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    model.developerMode = true
+    // A tool's hold streams without flipping the readings switch.
+    model.holdRawEMG("recorder", true)
+    #expect(connection.rawEMGMode && !model.rawEMGEnabled)
+    // The switch going on and off under a hold never cuts the tool off.
+    model.rawEMGEnabled = true
+    model.rawEMGEnabled = false
+    #expect(connection.rawEMGMode)
+    // Readings still decode what arrives.
+    connection.send(.rawEMGState(true))
+    connection.send(.rawEMGFrame(Data([1, 2, 3])))
+    #expect(model.rawEMGFrames == 1)
+    // A dropped session turns the switch off, but a hold keeps the stream for the next one.
+    connection.finish(error: KinesisError(message: "The band dropped the combined subscription"))
+    try await waitUntil { connection.starts == 2 }
+    #expect(connection.rawEMGMode && !model.rawEMGEnabled)
+    // With the hold gone and the switch off, the stream stops.
+    model.holdRawEMG("recorder", false)
+    #expect(!connection.rawEMGMode)
+    // The switch alone still works as before.
+    model.rawEMGEnabled = true
+    #expect(connection.rawEMGMode)
+    model.rawEMGEnabled = false
+    #expect(!connection.rawEMGMode)
+    await model.shutdown()
+}
+
+@Test @MainActor func kinesisSwitchesToggleOnlyInDeveloperModeAndPostNothing() async throws {
+    let defaults = MemoryDefaults()
+    defaults.set(true, forKey: "setupCompleted")
+    let connection = RecordedConnection()
+    let controls = RecordingControls()
+    var now = 100.0
+    let model = BandModel(defaults: defaults, connection: connection, controls: controls, clock: { now })
+    model.selectedAddress = "test-band"
+    model.mappings[.left] = .toggleAirCursor
+    model.mappings[.right] = .toggleHandwriting
+    var handwriting = 0
+    model.onToggleHandwriting = { handwriting += 1 }
+    model.connect()
+    connection.send(.connected)
+    connection.send(.heartbeat)
+    connection.send(.handedness(.right))
+    model.toggleControls()
+    var sequence: UInt64 = 0
+    func swipe(_ direction: String) {
+        now += 1
+        sequence += 1
+        connection.send(.gesture(BandGesture(sequence: sequence, timestampUs: sequence * 1000, finger: "thumb", action: direction,
+                                             receivedAt: now)), at: now)
+    }
+    // Outside developer mode, the switches do nothing.
+    swipe("left")
+    swipe("right")
+    try await waitUntil { model.gestureCount == 2 }
+    #expect(!model.airCursorEnabled && handwriting == 0)
+    // In developer mode, a swipe turns the air cursor on, and the same swipe, which still
+    // gets through while the cursor owns the pinches, turns it off.
+    model.developerMode = true
+    swipe("left")
+    try await waitUntil { model.airCursorEnabled }
+    swipe("left")
+    try await waitUntil { !model.airCursorEnabled }
+    swipe("right")
+    try await waitUntil { handwriting == 1 }
+    #expect(controls.actions.isEmpty)
+    await model.shutdown()
+}
+
+@Test @MainActor func aDoubleTapBoundToTheCursorTurnsItOffWithoutClicking() async throws {
+    let rig = CursorRig()
+    let model = rig.model
+    model.tapMappings[.indexDoubleTap] = .toggleAirCursor
+    try await rig.aim(0)
+    model.setAirCursorEnabled(true)
+    #expect(model.airCursorEnabled)
+    // A lone index pinch waits a moment for a second one, then clicks as it would have.
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    #expect(rig.controls.clicks.isEmpty)
+    try await waitUntil { rig.controls.clicks.count == 1 }
+    #expect(rig.controls.clicks.first?.0 == .left)
+    // The middle finger never waits.
+    rig.clock.now += 1
+    rig.gesture("middle", "press")
+    rig.gesture("middle", "release")
+    try await waitUntil { rig.controls.clicks.count == 2 }
+    // Two quick index pinches turn the cursor off, and click nothing.
+    rig.clock.now += 1
+    rig.gesture("index", "press")
+    rig.gesture("index", "release")
+    rig.gesture("index", "press")
+    try await waitUntil { !model.airCursorEnabled }
+    rig.gesture("index", "release")
+    try await Task.sleep(for: .milliseconds(500))
+    #expect(rig.controls.clicks.count == 2)
+    #expect(rig.controls.buttonEvents.filter(\.down).count == rig.controls.buttonEvents.filter { !$0.down }.count)
 }

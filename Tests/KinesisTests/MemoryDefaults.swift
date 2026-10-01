@@ -9,6 +9,7 @@ final class MemoryDefaults: UserDefaults, @unchecked Sendable {
     private var values: [String: Any] = [:]
 
     init() { super.init(suiteName: nil)! }
+    override func synchronize() -> Bool { true }
 
     /// Everything stored so far, the way `persistentDomain(forName:)` would report it.
     var contents: [String: Any] {

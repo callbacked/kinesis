@@ -874,3 +874,60 @@ private func motionConfirmations(_ events: [BandEvent]) -> [(MotionStreams, Bool
     let onAsk = try streamAsk(try #require(quiet.requests.first))
     #expect(onAsk.gyro == 1 && onAsk.orientation == 0)
 }
+
+@Test func nativeModelCaptureUsesExistingSubscriptionAndEmitsAuthenticatedSamples() throws {
+    var peer = try Peer()
+    let baseline = BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1)
+    _ = try peer.exchange(channel: 5, kind: 0x02000315,
+        payload: BandWire.field(1, 3) + BandWire.field(2, 1) + BandWire.field(5, baseline))
+    try peer.session.setModelCaptureEnabled(true, at: 100)
+    let modelFlags = BandWire.field(4, 1) + BandWire.field(22, 1) + BandWire.field(23, 1)
+    let bodies: [Data] = [
+        BandWire.field(5, baseline + modelFlags),
+        BandWire.field(14, BandWire.field(1, BandWire.field(1, 38))),
+        BandWire.field(14, BandWire.field(2, BandWire.field(3, Data("data-collection".utf8)) + BandWire.field(4, 27))),
+        BandWire.field(14, BandWire.field(2, BandWire.field(3, Data("data-collection-model".utf8)) + BandWire.field(4, 28))),
+        // The band's own values, read before anything is written: collection off, model 2.
+        BandWire.field(14, BandWire.field(3, BandWire.field(1, 27) + BandWire.field(8, Data()))),
+        BandWire.field(14, BandWire.field(3, BandWire.field(1, 28) + BandWire.field(11, BandWire.field(1, 2)))),
+        // Write acknowledgements have no data arm. Separate reads supply the values.
+        BandWire.field(14, BandWire.field(3, BandWire.field(1, 27) + BandWire.field(2, 1))),
+        BandWire.field(14, BandWire.field(3, BandWire.field(1, 28) + BandWire.field(2, 1))),
+        BandWire.field(14, BandWire.field(3, BandWire.field(1, 27) + BandWire.field(8, BandWire.field(1, 1)))),
+        BandWire.field(14, BandWire.field(3, BandWire.field(1, 28) + BandWire.field(11, BandWire.field(1, 5)))),
+        BandWire.field(6, BandWire.field(46, BandWire.field(3, 2) + BandWire.field(5, 9)))
+    ]
+    var channels: [UInt16] = []
+    for (index, body) in bodies.enumerated() {
+        let now = 100 + Double(index) * 0.1
+        let sent = try peer.session.flushModelCapture(at: now)
+        let request = try #require(peer.requests(sent.outgoing).first)
+        channels.append(request.channel)
+        let fields = try ProtoFields(request.payload)
+        if index == 0 {
+            let control = try ProtoFields(fields.bytes(4))
+            for flag in [3, 4, 6, 8, 22, 23] { #expect(try control.integer(flag) == 1) }
+            #expect(request.words.isEmpty) // Update the existing stream, don't open another subscription.
+        }
+        let id = try fields.requiredInteger(1)
+        _ = try peer.exchange(channel: request.channel & 0x7fff, kind: 0x02000315,
+            payload: BandWire.field(1, id) + BandWire.field(2, 1) + body, now: Double(index) * 0.1 + 0.01)
+    }
+    #expect(channels == [0x8005, 0x8001, 0x8001, 0x8001, 0x8001, 0x8001, 0x8001, 0x8001, 0x8001, 0x8001, 0x8007])
+    var scores = Data()
+    for _ in 0..<100 { scores += Float(-log(100.0 as Double)).bitPattern.littleEndianData }
+    for index in 0..<5 {
+        let payload = BandWire.field(1, UInt64(index)) + BandWire.field(2, 1_000_000 + UInt64(index) * 156_250)
+            + BandWire.field(3, scores) + BandWire.field(10, 3)
+        let result = try peer.exchange(channel: 0x8011, kind: 0x0200020c, payload: payload, now: 1)
+        let sample = try #require(result.events.compactMap { if case .inferenceFrame(let s) = $0.payload { s } else { nil } }.first)
+        #expect(sample.payload == payload && sample.pipeline == 3 && sample.values.count == 100)
+    }
+    let ready = try peer.session.flushModelCapture(at: 101.1)
+    #expect(ready.events.contains { if case .modelCaptureState(let s) = $0.payload { s.phase == .ready } else { false } })
+    // An ordinary motion update must preserve the model streams.
+    let update = try #require(peer.requests(peer.session.setMotionStreams(.none, at: 101.2)).first)
+    let flags = try ProtoFields(ProtoFields(update.payload).bytes(4))
+    for flag in [3, 4, 22, 23] { #expect(try flags.integer(flag) == 1) }
+    #expect(try flags.integer(6) == 0 && flags.integer(8) == 0)
+}

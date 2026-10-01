@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if KINESIS_DEV
         calibrationOverlay = CalibrationOverlay(model: model)
         #endif
+        HandwritingSession.shared.install(model)
         // Local monitors cover Kinesis; global monitors cover whichever app the
         // user is pointing at. Both use the app's existing Accessibility access.
         if let monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged], handler: { [weak self] event in
@@ -43,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A run in progress saves what it has.
         PracticeWindow.shared.close()
         #endif
+        // Writing ends before quitting, so the band goes back to its normal mode.
+        HandwritingSession.shared.finish()
         Task {
             await model.shutdown()
             sender.reply(toApplicationShouldTerminate: true)
@@ -119,6 +122,10 @@ private struct BandMenu: View {
         if model.developerMode {
             Toggle("air cursor", isOn: Binding(get: { model.airCursorEnabled }, set: { model.setAirCursorEnabled($0) }))
                 .disabled(!model.airCursorEnabled && !model.canUseAirCursor)
+            Button("handwriting") {
+                open()
+                NotificationCenter.default.post(name: .kinesisOpenPage, object: AppPage.write.rawValue)
+            }
             #if KINESIS_DEV
             Button("open lab") { PracticeWindow.shared.open(model: model) }
             #endif
