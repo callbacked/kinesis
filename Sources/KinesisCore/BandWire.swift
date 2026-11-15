@@ -99,18 +99,29 @@ public struct DataXFrame {
 
 struct DataXReceiver {
     private var pending = Data()
+    /// The sender pads every record by 1...16 bytes (a whole block of 0xd0 when its frames
+    /// end on a block boundary), as newer firmware does. Each record's padding is then known
+    /// exactly and comes off before parsing.
+    var alwaysPadded = false
+
+    /// A record without its trailing `n` bytes of `0xc0 + n`, or whole when it has none.
+    private static func withoutPadding(_ record: Data, upTo limit: Int) -> Data {
+        guard let marker = record.last else { return record }
+        let count = Int(marker) - 0xc0
+        guard (1...limit).contains(count), count <= record.count,
+              record.suffix(count).allSatisfy({ $0 == marker }) else { return record }
+        return Data(record.dropLast(count))
+    }
 
     mutating func feed(_ plaintext: Data) throws -> [DataXFrame] {
         guard !plaintext.isEmpty, plaintext.count % 16 == 0 else {
             throw BandProtocolError("Unaligned DataX plaintext")
         }
-        var bytes = plaintext
-        let padding = Int(bytes.last!) - 0xc0
-        // Only the repeated suffix observed on the tested firmware is stripped.
-        if (1...15).contains(padding), bytes.suffix(padding).allSatisfy({ Int($0) == 0xc0 + padding }) {
-            bytes.removeLast(padding)
+        // A whole block of 0xd0 shows the sender pads every record; from then on it's unambiguous.
+        if !alwaysPadded, plaintext.count >= 16, plaintext.suffix(16).allSatisfy({ $0 == 0xd0 }) {
+            alwaysPadded = true
         }
-        pending.append(bytes)
+        pending.append(Self.withoutPadding(plaintext, upTo: alwaysPadded ? 16 : 15))
         var frames: [DataXFrame] = []
         while pending.count >= 4 {
             let length = pending.be16(0)

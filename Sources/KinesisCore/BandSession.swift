@@ -17,6 +17,10 @@ public final class BandSession {
     private var transmitter: AirShieldCipher?
     private var receiver: AirShieldReceiver?
     private var datax = DataXReceiver()
+    /// The AirShield scheme in use: 3 on older firmware, 26 on newer.
+    private var scheme: UInt64 = 3
+    /// The channel of the frame being handled, with the per-connection bits newer firmware adds.
+    private var rawChannel: UInt16 = 0
     private var channelTypes: [UInt16: UInt32] = [:]
     private var dial = PinchDial()
     private var emittedEngagement = false
@@ -158,16 +162,21 @@ public final class BandSession {
             let peer = try P256.KeyAgreement.PublicKey(x963Representation: Data([4]) + point)
             switch kind {
             case 0x02000001:
-                guard peerKey == nil, try fields.integer(3) == 0, try fields.integer(4) == 3 else {
-                    throw BandProtocolError("Unsupported band encryption parameters")
+                // `parameters` is a bitmask of the band's schemes. Older firmware offers exactly 3;
+                // newer offers 27 and then uses 26 whatever the host offers.
+                let parameters = try fields.integer(4)
+                let newer = parameters & 24 != 0
+                guard peerKey == nil, try fields.integer(3) == 0, newer || parameters & 3 == 3 else {
+                    throw BandProtocolError("Unsupported band encryption parameters (\(parameters))")
                 }
+                scheme = newer ? 26 : 3
                 peerKey = point
                 peerChallenge = try fields.bytes(2, count: 16)
                 outgoing.append(try BandWire.frame(channel: 1, words: [0x02000002], payload:
                     BandWire.field(1, publicKey) + BandWire.field(2, seed) + BandWire.field(3, iv)
-                    + BandWire.field(4, UInt64(base)) + BandWire.field(5, 3)))
+                    + BandWire.field(4, UInt64(base)) + BandWire.field(5, scheme)))
             case 0x02000002:
-                guard point == peerKey, let peerChallenge, try fields.integer(5) == 3 else {
+                guard point == peerKey, let peerChallenge else {
                     throw BandProtocolError("Unexpected band encryption response")
                 }
                 let secret = try privateKey.sharedSecretFromKeyAgreement(with: peer).withUnsafeBytes { Data($0) }
@@ -176,8 +185,9 @@ public final class BandSession {
                 let peerIV = try fields.bytes(3, count: 16)
                 let peerBase = try fields.integer(4)
                 guard let peerCounter = UInt32(exactly: peerBase) else { throw BandProtocolError("Invalid band packet counter") }
-                transmitter = AirShieldCipher(keys: try AirShieldKeys(secret: secret, challenge: peerChallenge, seed: seed), iv: iv, counter: base)
-                receiver = AirShieldReceiver(cipher: AirShieldCipher(keys: try AirShieldKeys(secret: secret, challenge: challenge, seed: peerSeed), iv: peerIV, counter: peerCounter))
+                transmitter = AirShieldCipher(keys: try AirShieldKeys(secret: secret, challenge: peerChallenge, seed: seed, scheme: scheme), iv: iv, counter: base)
+                receiver = AirShieldReceiver(cipher: AirShieldCipher(keys: try AirShieldKeys(secret: secret, challenge: challenge, seed: peerSeed, scheme: scheme), iv: peerIV, counter: peerCounter))
+                if scheme != 3 { datax.alwaysPadded = true }
                 if let ceremony {
                     // Enrollment startup runs the ownership ceremony instead of
                     // the identity queries; it rejoins the enrolled flow at trust.
@@ -495,7 +505,7 @@ public final class BandSession {
                 }
             }
             bandTrusted = true
-            outgoing.append(try encrypt(BandWire.frame(channel: frame.channel & 0x7fff, words: [0x03001000])))
+            outgoing.append(try encrypt(BandWire.frame(channel: rawChannel & 0x7fff, words: [0x03001000])))
         } else if kind == 0x02001000, frame.channel == 0x8001, endLinkSent {
             let fields = try ProtoFields(frame.payload)
             guard try fields.requiredInteger(1) == 1, try fields.bytes(2).count == 16 else {
@@ -537,7 +547,11 @@ public final class BandSession {
         return [BandEvent(.dialState(dial.engaged), at: time)]
     }
 
-    private func input(_ frame: DataXFrame, at time: Double, outgoing: inout Data) throws -> [BandEvent] {
+    private func input(_ received: DataXFrame, at time: Double, outgoing: inout Data) throws -> [BandEvent] {
+        // Newer firmware sets extra bits (0x1c00, different per connection) on channels it
+        // answers or opens: 0x9c01 for 0x8001. Frames are routed on the flag and the low byte.
+        rawChannel = received.channel
+        let frame = DataXFrame(channel: received.channel & 0x80ff, words: received.words, payload: received.payload)
         if let kind = frame.words.last {
             guard channelTypes.count < 1024 || channelTypes[frame.channel] != nil else {
                 throw BandProtocolError("Too many band input channels")

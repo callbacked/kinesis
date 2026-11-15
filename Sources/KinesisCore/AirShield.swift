@@ -11,21 +11,40 @@ public struct BandProtocolError: LocalizedError {
 struct AirShieldKeys {
     let encryption: SymmetricKey
     let mac: SymmetricKey
+    /// Bytes the MAC covers before the counter (`02 02 00 00` under scheme 26).
+    let macPrefix: Data
+    /// Pad a block-aligned frame with a whole block, as newer firmware does
+    /// (scheme 3 sends aligned frames unpadded).
+    let padAligned: Bool
 
-    // Only the parameter-3 exchange has been verified on this band.
-    init(secret: Data, challenge: Data, seed: Data) throws {
+    /// Scheme 3 is older firmware. Newer firmware offers 27 and names 26, whose rules were
+    /// worked out on hardware by band-core (896kb, MIT): the HKDF runs over the raw ECDH
+    /// secret with salt SHA256(challenge || seed), the encryption key doubles as the MAC
+    /// key, and the MAC covers `02 02 00 00` before the counter.
+    init(secret: Data, challenge: Data, seed: Data, scheme: UInt64 = 3) throws {
         guard secret.count == 32, challenge.count == 16, seed.count == 32 else {
             throw BandProtocolError("Invalid AirShield key material")
         }
-        let hashed = Data(SHA256.hash(data: secret))
-        encryption = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: hashed),
-            salt: Data(SHA256.hash(data: hashed + challenge + seed)), info: Data("AirShield".utf8), outputByteCount: 32)
+        if scheme == 3 {
+            let hashed = Data(SHA256.hash(data: secret))
+            encryption = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: hashed),
+                salt: Data(SHA256.hash(data: hashed + challenge + seed)), info: Data("AirShield".utf8), outputByteCount: 32)
+            macPrefix = Data()
+            padAligned = false
+        } else {
+            encryption = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: secret),
+                salt: Data(SHA256.hash(data: challenge + seed)), info: Data("AirShield".utf8), outputByteCount: 32)
+            macPrefix = Data([2, 2, 0, 0])
+            padAligned = true
+        }
         mac = encryption
     }
 
     init(encryption: Data, mac: Data) {
         self.encryption = SymmetricKey(data: encryption)
         self.mac = SymmetricKey(data: mac)
+        macPrefix = Data()
+        padAligned = false
     }
 }
 
@@ -57,19 +76,20 @@ struct AirShieldCipher {
     private(set) var counter: UInt32
 
     mutating func encrypt(_ frame: Data) throws -> Data {
-        let count = (16 - frame.count % 16) % 16
+        let remainder = 16 - frame.count % 16
+        let count = remainder == 16 && !keys.padAligned ? 0 : remainder
         let padded = frame + Data(repeating: UInt8(0xc0 + count), count: count)
         guard !padded.isEmpty, padded.count <= 4096 else { throw BandProtocolError("AirShield frame too large") }
         let ciphertext = try crypt(padded, key: keys.encryption, iv: iv, operation: CCOperation(kCCEncrypt))
         let body = Data([UInt8(ciphertext.count / 16 - 1)]) + ciphertext
-        let tag = HMAC<SHA256>.authenticationCode(for: counter.littleEndianData + body, using: keys.mac)
+        let tag = HMAC<SHA256>.authenticationCode(for: keys.macPrefix + counter.littleEndianData + body, using: keys.mac)
         iv = Data(ciphertext.suffix(16))
         counter &+= 1
         return Data([0x40]) + Data(tag.prefix(8)) + body
     }
 
     mutating func decrypt(_ packet: Data) throws -> Data {
-        let expected = HMAC<SHA256>.authenticationCode(for: counter.littleEndianData + packet.dropFirst(9), using: keys.mac)
+        let expected = HMAC<SHA256>.authenticationCode(for: keys.macPrefix + counter.littleEndianData + packet.dropFirst(9), using: keys.mac)
         // Compare every byte before decrypting. No unauthenticated plaintext leaves this type.
         let difference = zip(expected.prefix(8), packet.dropFirst().prefix(8)).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) }
         guard difference == 0 else { throw BandProtocolError("Band packet authentication failed") }

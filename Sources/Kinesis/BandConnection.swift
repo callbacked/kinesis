@@ -461,12 +461,15 @@ final class NativeBandConnection: NSObject, BandConnection,
             log.error("Input channel read failed: \(native.domain, privacy: .public) \(native.code, privacy: .public)")
             fail(Self.explainingPairing(error)); return
         }
-        guard characteristic.uuid == psmID, let bytes = characteristic.value, bytes == Data([255, 0]) else {
+        // The characteristic holds the input channel's L2CAP PSM as a little-endian u16:
+        // 255 on older firmware, 129 on newer.
+        guard characteristic.uuid == psmID, let bytes = characteristic.value, bytes.count == 2,
+              case let psm = UInt16(bytes[bytes.startIndex]) | UInt16(bytes[bytes.startIndex + 1]) << 8, psm != 0 else {
             fail(KinesisError(message: "Unsupported band input channel")); return
         }
-        log.info("Opening native L2CAP channel")
+        log.notice("Opening native L2CAP channel \(psm, privacy: .public)")
         stage = "opening input channel"
-        peripheral.openL2CAPChannel(255)
+        peripheral.openL2CAPChannel(psm)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didOpen channel: CBL2CAPChannel?, error: Error?) {
