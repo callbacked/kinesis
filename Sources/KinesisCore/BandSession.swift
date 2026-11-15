@@ -480,8 +480,11 @@ public final class BandSession {
 
     /// Handle the enrolled identity exchange until both directions trust each
     /// other, then rejoin the shared EndLinkSetup flow.
-    private func receiveIdentity(_ frame: DataXFrame, outgoing: inout Data) throws -> [BandEvent] {
-        guard let kind = frame.words.last else { return [] }
+    ///
+    /// `kind` is the channel's type, not only this frame's own header: newer firmware sends
+    /// its proof on the identity channel it already opened, so that frame carries no type
+    /// words (seen on hardware, 2026-11-15: an 82-byte wordless frame on 0x8002).
+    private func receiveIdentity(_ frame: DataXFrame, kind: UInt32, outgoing: inout Data) throws -> [BandEvent] {
         if kind & 0xff000000 == 0x03000000, frame.channel == 2 {
             guard kind == 0x03001000 else {
                 if kind == 0x03001043 {
@@ -493,7 +496,11 @@ public final class BandSession {
             }
             appTrusted = true
         } else if kind == 0x02001001, frame.channel & 0x8000 != 0 {
-            guard !bandTrusted else { throw BandProtocolError("The band sent a duplicate identity proof") }
+            guard !bandTrusted else {
+                // A later wordless frame on the same channel is not necessarily a proof.
+                if frame.words.isEmpty { return [] }
+                throw BandProtocolError("The band sent a duplicate identity proof")
+            }
             let fields = try ProtoFields(frame.payload)
             guard let peerKey, let peerSeed else { throw BandProtocolError("Band encryption is not ready") }
             let signature = try fields.bytes(2, count: 64)
@@ -580,7 +587,7 @@ public final class BandSession {
             return try receiveCeremony(frame, at: time, outgoing: &outgoing)
         }
         if enrollment != nil, setupStage == .identity, !stopping {
-            return try receiveIdentity(frame, outgoing: &outgoing)
+            return try receiveIdentity(frame, kind: kind, outgoing: &outgoing)
         }
         if kind == 0x02001000, frame.channel == 0x8001, setupStage == .link, !stopping {
             let fields = try ProtoFields(frame.payload)
