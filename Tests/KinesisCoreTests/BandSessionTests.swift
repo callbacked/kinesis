@@ -165,7 +165,7 @@ private struct Peer {
     #expect(wrongID.requests.isEmpty)
     let accepted = try peer.exchange(channel: 3, kind: 0x02000315,
         payload: BandWire.field(1, 1) + BandWire.field(2, 1) + BandWire.field(4, Data()), now: 7)
-    #expect(accepted.requests.map(\.channel) == [0x8005, 0x8005, 0x8006])
+    #expect(accepted.requests.map(\.channel) == [0x8005, 0x8005, 0x8006, 0x8006])
     #expect(accepted.events.isEmpty && !peer.session.streamsEnabled)
     let repeatedLink = try peer.exchange(channel: 0x8001, kind: 0x02001000, payload: ready, now: 7)
     let repeatedDevice = try peer.exchange(channel: 3, kind: 0x02000315,
@@ -200,7 +200,7 @@ func startupIgnoresInputUntilDeviceInfoSucceeds(linkReady: Bool) throws {
     }
     let device = try peer.exchange(channel: 3, kind: 0x02000315,
         payload: BandWire.field(1, 1) + BandWire.field(2, 1) + BandWire.field(4, Data()))
-    #expect(device.requests.map(\.channel) == [0x8005, 0x8005, 0x8006])
+    #expect(device.requests.map(\.channel) == [0x8005, 0x8005, 0x8006, 0x8006])
     let enabled = try peer.exchange(channel: 5, kind: 0x02000315,
         payload: BandWire.field(1, 3) + BandWire.field(2, 1) + BandWire.field(5, flags))
     #expect(enabled.events.contains { if case .connected = $0.payload { true } else { false } })
@@ -264,7 +264,11 @@ func nativeHandSelectionWritesOnlyHandednessAndChecksAnIndependentReadback(selec
     var peer = try Peer()
     let initial: UInt64 = selected == .left ? 0 : 1
     let desired: UInt64 = selected == .left ? 1 : 0
-    let query = try #require(peer.startup.last)
+    // The hand read opens the service; the active-state request follows it on the same channel.
+    let active = try #require(peer.startup.last)
+    #expect(active.channel == 0x8006 && active.words.isEmpty)
+    #expect(active.payload == Data(hex: "088080402a023002"))
+    let query = try #require(peer.startup.dropLast().last)
     #expect(query.channel == 0x8006)
     #expect(query.words == [0x8100ce56, 0x02000314])
     #expect(query.payload == Data(hex: "08012a00"))
@@ -333,7 +337,7 @@ func nativeHandSelectionWritesOnlyHandednessAndChecksAnIndependentReadback(selec
 
 @Test func nativeHandshakeSubscribesAndStopsTheSameStreamsOnTheSameChannel() throws {
     var peer = try Peer()
-    #expect(peer.startup.map(\.channel) == [0x8002, 0x8001, 0x8003, 0x8005, 0x8005, 0x8006])
+    #expect(peer.startup.map(\.channel) == [0x8002, 0x8001, 0x8003, 0x8005, 0x8005, 0x8006, 0x8006])
     #expect(peer.startup[0].words == [0x81000024, 0x02003000])
     #expect(peer.startup[1].words == [0x02001000])
     let end = try ProtoFields(peer.startup[1].payload)

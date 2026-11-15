@@ -338,6 +338,17 @@ public final class BandSession {
         return bytes
     }
 
+    /// Put the band in its active state (`ConfigReq.deviceState` = ACTIVE, field 6 = 2), as the
+    /// phone app's gesture screens do. A band can come up in standby, notably after a reset or a
+    /// firmware update: it then streams motion but runs only its wake model, so no gesture ever
+    /// arrives. Asking on every connection covers it (from band-core, 896kb, MIT). Sent right
+    /// after the hand read, which opens the service, under its own request id; the answer is
+    /// not needed and `receiveHand` ignores it.
+    private func requestActive() throws -> Data {
+        try encrypt(BandWire.frame(channel: configurationChannel, words: [],
+            payload: BandWire.field(1, 1 << 20) + BandWire.field(5, BandWire.field(6, 2))))
+    }
+
     private func receiveHand(_ fields: ProtoFields, at time: Double, outgoing: inout Data) throws -> [BandEvent] {
         guard let request = handRequest, try fields.integer(1) == request.id else { return [] }
         handRequest = nil
@@ -644,6 +655,7 @@ public final class BandSession {
             outgoing.append(try streamRequest(id: 2, enabled: nil))
             outgoing.append(try streamRequest(id: 3, enabled: true))
             outgoing.append(try requestHand(nil, reading: true, at: time))
+            outgoing.append(try requestActive())
             return []
         }
         guard setupStage == .input else { return [] }
