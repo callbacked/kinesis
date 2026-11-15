@@ -122,7 +122,7 @@ func enrolledStartupVerifiesBothTrustDirectionsBeforeLinkSetup(proofFirst: Bool)
     #expect(endAck.first?.channel == 0x8003)
     let info = try peer.send(try BandWire.frame(channel: 3, words: [0x02000315],
         payload: BandWire.field(1, 1) + BandWire.field(2, 1) + BandWire.field(4, Data())))
-    #expect(info.map(\.channel) == [0x8005, 0x8005, 0x8006])
+    #expect(info.map(\.channel) == [0x8005, 0x8005, 0x8006, 0x8006])
     let flags = BandWire.field(3, 1) + BandWire.field(6, 1) + BandWire.field(8, 1)
     let enabled = try peer.send(try BandWire.frame(channel: 5, words: [0x02000315],
         payload: BandWire.field(1, 3) + BandWire.field(2, 1) + BandWire.field(5, flags)))
